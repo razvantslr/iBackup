@@ -1,145 +1,63 @@
 import sys
 import shutil
 import time
-import sqlite3
-
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Optional
-from blake3 import blake3
 from collections import defaultdict
-from datetime import datetime
 
-# constants.py
-SUPPORTED_IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.heic'}
-SUPPORTED_VIDEO_EXT = {'.mp4', '.mov'}
-SUPPORTED_MEDIA_EXT = SUPPORTED_IMAGE_EXT | SUPPORTED_VIDEO_EXT
+from scanner import *
+from db import init_db, get_indexed_file, upsert_file
+from hashing import compute_blake3_hash
+from backup import build_backup_path, file_exists, copy_file
 
-#
-@dataclass
-class MediaFile:
-    path: str
-    extension: str
-    media_type: str # 'image' | 'video' 
-    size_bytes: int
-    hash: Optional[str] = None
-
-def bytes_to_gb(num_bytes: int) -> float:
-    return num_bytes / (1024 ** 3)
-
-def compute_blake3_hash(file_path: str, chunk_size=1024 * 1024) -> str:
-    hasher = blake3()
-    with open(file_path, 'rb') as f:
-        while chunk := f.read(chunk_size):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-def init_db(db_path="ibackup.db"):
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute('''
-                CREATE TABLE IF NOT EXISTS media_index (
-                    path TEXT PRIMARY KEY,
-                    size_bytes INTEGER,
-                    mtime REAL,
-                    hash TEXT
-                    )
-                ''')
-    conn.commit()
-    return conn
-
-def get_indexed_file(conn, path):
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT size_bytes, mtime, hash FROM media_index WHERE path = ?",
-        (path,)
-    )
-    return cur.fetchone()
-
-def upsert_file(conn, media):
-    stat = Path(media.path).stat()
-    conn.execute("""
-        INSERT INTO media_index (path, size_bytes, mtime, hash)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(path) DO UPDATE SET
-            size_bytes=excluded.size_bytes,
-            mtime=excluded.mtime,
-            hash=excluded.hash
-    """, (
-        media.path,
-        stat.st_size,
-        stat.st_mtime,
-        media.hash
-    ))
-    conn.commit()
-
-def get_file_date(path: str):
-    stat = Path(path).stat()
-    return datetime.fromtimestamp(stat.st_mtime)
-
-def build_backup_path(base_dest, media):
-    date = get_file_date(media.path)
-    year = date.strftime("%Y")
-    month = f"{date.month:02d}"
-
-    dest_dir = Path(base_dest) / year / month
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    return dest_dir
-
-def file_exists(dest_dir, media):
-    #dest_dir = Path(dest_dir)
-    return (dest_dir / Path(media.path).name).exists()
-
-def copy_file(media, dest_dir):
-    src = Path(media.path)
-    dst = dest_dir / src.name
-    shutil.copy2(src,dst)
 
 def main():
     print("iBackup starting...")
     
     # check cmd line args
-    if len(sys.argv) < 2:
-        print("usage: python main.py <backup_dir>")
+    if len(sys.argv) < 3:
+        print("usage: python main.py <source> <backup>")
         return
-    
-    # check c free space
-    free_space = shutil.disk_usage("c:/").free / (1024 ** 3)
-    print(f"c:/ Free space: {free_space:.2f} GB")
-    
-    backup_path = sys.argv[1]
+
+    source_path = sys.argv[1]
+    source_path = Path(source_path).resolve()
+    backup_path = sys.argv[2]
     backup_path = Path(backup_path).resolve()
 
-    # validate backup path
-    if not backup_path.exists():
-        print("error: path does not exist")
+    if not source_path.exists():
+        print("error: source path does not exist")
+        return
+    if not source_path.is_dir():
+        print("error: source  path not a directory")
         return
 
+    if not backup_path.exists():
+        print("error: backup path does not exist")
+        return
     if not backup_path.is_dir():
-        print("error: not a directory")
+        print("error: backup path not a directory")
         return
     
+    print("Valid source path:", source_path)
     print("Valid backup path:", backup_path)
 
-    # print contents of backup
-    # print("contents of backup dir:")
-    # for item in backup_path.iterdir():
-    #     if item.is_file():
-    #         print("FILE: " + item.name)
-    #     elif item.is_dir():
-    #         print("DIR: " + item.name)
+    print("partition letter: ", source_path.name[:3])
+    # check free space
+    free_space = shutil.disk_usage(source_path.drive).free / (1024 ** 3)
+    print(f"{source_path.drive} Source free space: {free_space:.2f} GB")
+
+    free_space = shutil.disk_usage(backup_path.drive).free / (1024 ** 3)
+    print(f"{backup_path.drive} Backup free space: {free_space:.2f} GB")
     
     # count supported media files
     total_files = 0 
     image_files = 0
     video_files = 0
-    media_files = []
+    media_files = []#scanner
     media_type = ''
     total_size = 0
     image_size = 0
     video_size = 0
-
+    #scan for media files
     for item in backup_path.rglob('*'):
         if not item.is_file():
             continue
