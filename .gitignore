@@ -10,9 +10,9 @@ venv/
 # Logs / temp
 *.log
 
-# OS junk
+# OS
 .DS_Store
-Thumbs.db
+ibackup.db
 
 # inoutput 
 TEST/

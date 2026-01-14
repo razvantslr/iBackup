@@ -88,7 +88,7 @@ def build_backup_path(base_dest, media):
     return dest_dir
 
 def file_exists(dest_dir, media):
-    dest_dir = Path(dest_dir)
+    #dest_dir = Path(dest_dir)
     return (dest_dir / Path(media.path).name).exists()
 
 def copy_file(media, dest_dir):
@@ -218,7 +218,7 @@ def main():
                 print(f" {f.path}")
 
     # backup files
-    backup_path = f"C:/Projects/iBackup/TEST/backup/"
+    backup_path = Path(f"C:/Projects/iBackup/TEST/backup/")
     copied = 0
     skipped = 0
     seen_hashes = set() 
