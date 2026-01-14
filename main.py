@@ -10,58 +10,42 @@ from hashing import compute_blake3_hash
 from backup import build_backup_path, file_exists, copy_file
 
 
-def main():
-    print("iBackup starting...")
-    
-    # check cmd line args
+def parse_args():
     if len(sys.argv) < 3:
-        print("usage: python main.py <source> <backup>")
-        return
+        print("Usage: python main.py <source_path> <backup_path>")
+        sys.exit(1)
+    source = Path(sys.argv[1]).resolve()
+    backup = Path(sys.argv[2]).resolve()
+    return source, backup
 
-    source_path = sys.argv[1]
-    source_path = Path(source_path).resolve()
-    backup_path = sys.argv[2]
-    backup_path = Path(backup_path).resolve()
+def validate_path(path):
+    if not path.exists():
+        raise ValueError(f"error: {path} does not exist")
+    if not path.is_dir():
+        raise ValueError(f"error: {path} not a directory")
+    print(f"Validated path: {path}")
 
-    if not source_path.exists():
-        print("error: source path does not exist")
-        return
-    if not source_path.is_dir():
-        print("error: source  path not a directory")
-        return
+def print_free_space(path):
+    free_space = shutil.disk_usage(path.drive).free / (1024 ** 3)
+    print(f"Free space {path.drive}: {free_space:.2f} GB")
 
-    if not backup_path.exists():
-        print("error: backup path does not exist")
-        return
-    if not backup_path.is_dir():
-        print("error: backup path not a directory")
-        return
+def check_free_space(backup_path, media_files):
+    print(f"Checking free space on {backup_path} ...")
+
+    required_size = sum(m.size_bytes for m in media_files)
+    backup_free = shutil.disk_usage(backup_path.drive).free
+    if required_size > backup_free:
+        raise ValueError("Not enough free space on backup drive")
     
-    print("Valid source path:", source_path)
-    print("Valid backup path:", backup_path)
+    print("Sufficient free space on backup drive")
 
-    print("partition letter: ", source_path.name[:3])
-    # check free space
-    free_space = shutil.disk_usage(source_path.drive).free / (1024 ** 3)
-    print(f"{source_path.drive} Source free space: {free_space:.2f} GB")
-
-    free_space = shutil.disk_usage(backup_path.drive).free / (1024 ** 3)
-    print(f"{backup_path.drive} Backup free space: {free_space:.2f} GB")
+def scan_for_media_files(path):
+    print(f"Scanning {path} for media files ...")
     
-    # count supported media files
-    total_files = 0 
-    image_files = 0
-    video_files = 0
-    media_files = []#scanner
-    media_type = ''
-    total_size = 0
-    image_size = 0
-    video_size = 0
-    #scan for media files
-    for item in backup_path.rglob('*'):
+    media_files = []
+    for item in path.rglob('*'):
         if not item.is_file():
             continue
-
         ext = item.suffix.lower()
         if ext not in SUPPORTED_MEDIA_EXT:
             continue
@@ -70,7 +54,6 @@ def main():
             media_type = 'image'
         elif ext in SUPPORTED_VIDEO_EXT:
             media_type = 'video'
-
         media = MediaFile(
             path=str(item),
             extension=ext,
@@ -79,18 +62,21 @@ def main():
         )
         media_files.append(media)
 
-    print(f"\nCollected {len(media_files)} media files\n")    
-    print("\nFiles sanity check:")
+    # logging
+    print(f"Collected {len(media_files)} media files\n")    
+    print("Files sanity check:")
     for media in media_files[:5]:
         print(media)
+    print("\n")
 
-    # compute hashes
-    print("\nComputing hashes for media files ...")
+    return media_files
+
+def compute_hashes(media_files):
+    print("Computing hashes for media files ...")
     
     total = len(media_files)
     conn = init_db()
 
-    #for media in media_files:
     for index, media in enumerate(media_files, start=1):
         stat = Path(media.path).stat()
         indexed = get_indexed_file(conn, media.path)
@@ -115,41 +101,51 @@ def main():
     for media in media_files[:5]:
         print(media.hash, media.path)
 
-    # find duplicates
+def find_duplicates(media_files):
+    print("Finding duplicate media files ...")
+    
     duplicates = defaultdict(list)
     for media in media_files:
         if media.hash is None:
             continue
         duplicates[media.hash].append(media)
+
     duplicate_groups = {
         h: files for h, files in duplicates.items()
         if len(files) > 1
     }
 
-    print("\nDuplicates files:")
+    print("Duplicate files:")
     if not duplicate_groups:
-        print("no dulicates found.")
+        print("No duplicates found.")
     else:
         for h, files in duplicate_groups.items():
             print(f"\nHash: {h}")
             for f in files:
                 print(f" {f.path}")
+    
+    return duplicate_groups
 
-    # backup files
-    backup_path = Path(f"C:/Projects/iBackup/TEST/backup/")
+def backup_files(media_files, path):
+    print(f"Backing up media files to {path}...")
+
+    backup_path = path
     copied = 0
     skipped = 0
     seen_hashes = set() 
 
     for media in media_files:
+        # file already exists in backup
         if file_exists(backup_path, media):
             skipped += 1
             continue
+        # duplicate file based on hash
         if media.hash in seen_hashes:
             skipped += 1
             continue
-
+        # build destination path
         dest_dir = build_backup_path(backup_path, media)
+        # copy file once
         try:
             copy_file(media, dest_dir)
             seen_hashes.add(media.hash)
@@ -157,10 +153,16 @@ def main():
         except Exception as e:
             print("error backing up", media.path, ":", e)
 
-    print(f"\nBackup complete. copied=[{copied}], skipped=[{skipped}]")
-          
+    print(f"Backup complete. copied=[{copied}], skipped=[{skipped}]") #todo: size skipped
 
-    # calculate stats
+def print_stats(media_files):
+    total_files = 0 
+    image_files = 0
+    video_files = 0
+    total_size = 0
+    image_size = 0
+    video_size = 0
+
     for media in media_files:
         total_files += 1 
         total_size += media.size_bytes
@@ -181,6 +183,38 @@ def main():
     print(f"Total size :  {bytes_to_gb(total_size):.2f} GB")
     print(f"Images size :  {bytes_to_gb(image_size):.2f} GB")
     print(f"Videos size :  {bytes_to_gb(video_size):.2f} GB")
+
+def main():
+    print("iBackup starting...")
+    
+    source_path, backup_path = parse_args()
+    try:
+        validate_path(source_path)
+        validate_path(backup_path)
+    except ValueError as e: 
+        print("error:", e)
+        sys.exit(1)
+
+    print_free_space(source_path)
+    print_free_space(backup_path)
+
+    #scan for media files
+    media_files = scan_for_media_files(source_path)
+
+    # check free space
+    check_free_space(backup_path, media_files)
+
+    # compute hashes
+    compute_hashes(media_files)
+
+    # find duplicates
+    duplicates = find_duplicates(media_files)    
+
+    # backup files
+    backup_files(media_files, backup_path)
+
+    # calculate stats
+    print_stats(media_files)
 
 
 if __name__ == "__main__":
