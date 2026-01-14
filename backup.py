@@ -10,7 +10,7 @@ def get_file_date(path: str):
 def build_backup_path(base_dest, media):
     date = get_file_date(media.path)
     year = date.strftime("%Y")
-    month = f"{date.month:02d}_{date.month}" # monthnumer_monthname
+    month = date.strftime("%m_%B")  # 07_July
     dest_dir = Path(base_dest) / year / month
     dest_dir.mkdir(parents=True, exist_ok=True)
     return dest_dir
