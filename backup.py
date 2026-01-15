@@ -51,4 +51,4 @@ def backup_files(media_files, path):
         except Exception as e:
             logging.error("error backing up", media.path, ":", e)
 
-    logging.info(f"\nBackup complete. copied=[{copied}], skipped=[{skipped}]")
+    logging.info(f"Backup complete. copied=[{copied}], skipped=[{skipped}]")

@@ -117,8 +117,8 @@ def scan_for_media_files(path):
         media_files.append(media)
 
     # logging
-    logging.info(f"Collected {len(media_files)} media files\n")    
-    logging.debug("\nFiles sanity check:")
+    logging.info(f"Collected {len(media_files)} media files")    
+    logging.debug("Files sanity check:")
     for media in media_files[:5]:
         logging.debug(media)
 

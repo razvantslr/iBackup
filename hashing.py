@@ -38,6 +38,6 @@ def compute_hashes(media_files):
         if index % 10 == 0 or index == total:
             logging.info(f"[{index}/{total}] hashed")
     
-    logging.debug("\nHash sanity check:")
+    logging.debug("Hash sanity check:")
     for media in media_files[:5]:
         logging.debug(media.hash, media.path)

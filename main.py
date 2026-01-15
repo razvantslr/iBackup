@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from scanner import scan_for_media_files, bytes_to_gb, MediaType
 from db import init_db, get_indexed_file, upsert_file
-from hashing import compute_blake3_hash
+from hashing import compute_blake3_hash, compute_hashes
 from backup import build_backup_path, file_exists, copy_file
 from logger import logger_init
 from duplicate import find_duplicates
@@ -104,36 +104,6 @@ def check_free_space(backup_path, media_files):
     
     logging.info("Sufficient free space on backup drive")
 
-def compute_hashes(media_files):
-    logging.info("Computing hashes for media files ...")
-    
-    total = len(media_files)
-    conn = init_db()
-
-    for index, media in enumerate(media_files, start=1):
-        stat = Path(media.path).stat()
-        indexed = get_indexed_file(conn, media.path)
-        if indexed:
-            old_size, old_mtime, old_hash = indexed
-            if old_size == stat.st_size and old_mtime == stat.st_mtime:
-                media.hash = old_hash
-                continue # skip re-hashing
-        
-        try:
-            media.hash = compute_blake3_hash(media.path)
-        except Exception as e:
-            logging.error("error computhing hash for", media.path, ":", e)
-            continue
-
-        upsert_file(conn, media)
-
-        if index % 10 == 0 or index == total:
-            print(f"[{index}/{total}] hashed")
-    
-    logging.debug("\nHash sanity check:")
-    for media in media_files[:5]:
-        logging.debug(media.hash, media.path)
-
 def backup_files(media_files, path, dry_run=False):
     logging.info(f"Backing up media files to {path}...")
 
@@ -185,12 +155,12 @@ def print_stats(media_files):
             video_files += 1
             video_size += media.size_bytes 
 
-    logging.info("\nScan summary:")
+    logging.info("Scan summary:")
     logging.info(f"Total media files : {total_files}")
     logging.info(f"Images           : {image_files}")
     logging.info(f"Videos           : {video_files}")
 
-    logging.info(f"\nSize summary:")
+    logging.info(f"Size summary:")
     logging.info(f"Total size :  {bytes_to_gb(total_size):.2f} GB")
     logging.info(f"Images size :  {bytes_to_gb(image_size):.2f} GB")
     logging.info(f"Videos size :  {bytes_to_gb(video_size):.2f} GB")

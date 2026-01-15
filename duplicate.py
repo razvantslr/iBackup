@@ -20,7 +20,7 @@ def find_duplicates(media_files):
         logging.info("No duplicates found.")
     else:
         for h, files in duplicate_groups.items():
-            logging.info(f"\nHash: {h}")
+            logging.info(f"Hash: {h}")
             for f in files:
                 logging.info(f" {f.path}")
     
