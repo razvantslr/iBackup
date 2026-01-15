@@ -157,7 +157,7 @@ def find_duplicates(media_files):
     
     return duplicate_groups
 
-def backup_files(media_files, path):
+def backup_files(media_files, path, dry_run=False):
     print(f"Backing up media files to {path}...")
 
     backup_path = path
@@ -178,7 +178,10 @@ def backup_files(media_files, path):
         dest_dir = build_backup_path(backup_path, media)
         # copy file once
         try:
-            copy_file(media, dest_dir)
+            if dry_run:
+                print(f"[dry-run] would copy {media.path} to {dest_dir}")
+            else:
+                copy_file(media, dest_dir)
             seen_hashes.add(media.hash)
             copied += 1
         except Exception as e:
@@ -263,7 +266,7 @@ def main():
     duplicates = find_duplicates(media_files)    
 
     # backup files
-    backup_files(media_files, args.backup)
+    backup_files(media_files, args.backup, args.dry_run)
 
     # calculate stats
     print_stats(media_files)
