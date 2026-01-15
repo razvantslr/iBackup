@@ -12,11 +12,13 @@ from backup import build_backup_path, file_exists, copy_file
 
 
 def parse_args():
+    
     parser = argparse.ArgumentParser(
         prog="iBackup",
         description="A tool to backup and organize media files."
     )
 
+    # Required arguments
     parser.add_argument(
         "--source",
         type=Path,
@@ -31,20 +33,33 @@ def parse_args():
         help="Path to the backup directory where media files will be copied."
     )
 
+    # Filter options
     parser.add_argument(
         "--only",
         choices=[type.value for type in MediaType],
-        help="Only process media files of the specified type."
+        help="Filter: Only the specified type will be processed."
     )
 
-    #todo: add --exclude and --include options
+    parser.add_argument(
+        "--include",
+        choices=[type.value for type in MediaType],
+        help="Filter: Include the specified type for processing." 
+    )
 
+    parser.add_argument(
+        "--exclude",
+        choices=[type.value for type in MediaType],
+        help="Filter: Exclude the specified type from processing." 
+    )
+
+    # Other options
     parser.add_argument(
         "--dry-run",
         action="store_true", 
         help="Perform a trial run without making any changes."
     )
 
+    # Verbose output
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -56,11 +71,10 @@ def parse_args():
     args.source = args.source.resolve() # eg. from "./media" to "C:/media"
     args.backup = args.backup.resolve()
 
-    # todo: add after exclude and include options implementation
     # validation only one filter mode
-    #modes = [args.only, args.include, args.exclude]
-    #if sum(mode is not None for mode in modes) > 1: # todo: refactor more readable like this: 
-    #    parser.error("Only one of --only, --include, or --exclude can be specified.")
+    filter_modes = [args.only, args.include, args.exclude]
+    if sum(mode is not None for mode in filter_modes) > 1: 
+        parser.error("Only one of --only, --include, or --exclude can be specified.")
 
     return args
 
@@ -143,7 +157,7 @@ def find_duplicates(media_files):
     
     return duplicate_groups
 
-def backup_files(media_files, path):
+def backup_files(media_files, path, dry_run=False):
     print(f"Backing up media files to {path}...")
 
     backup_path = path
@@ -164,7 +178,10 @@ def backup_files(media_files, path):
         dest_dir = build_backup_path(backup_path, media)
         # copy file once
         try:
-            copy_file(media, dest_dir)
+            if dry_run:
+                print(f"[dry-run] would copy {media.path} to {dest_dir}")
+            else:
+                copy_file(media, dest_dir)
             seen_hashes.add(media.hash)
             copied += 1
         except Exception as e:
@@ -201,12 +218,18 @@ def print_stats(media_files):
     print(f"Images size :  {bytes_to_gb(image_size):.2f} GB")
     print(f"Videos size :  {bytes_to_gb(video_size):.2f} GB")
 
-def apply_media_folders(media_files, args):
+def apply_media_folders_filter(media_files, args):
     if args.only:
-        only_type = MediaType(args.only) # convert string to MediaType
-        return [m for m in media_files if m.type == only_type] # filter by type
+        flt_only_type = MediaType(args.only) 
+        return [m for m in media_files if m.type == flt_only_type]
 
-    # todo: implement include and exclude filters
+    if args.include:
+        flt_include_type = MediaType(args.include)
+        return [m for m in media_files if m.type == flt_include_type]
+
+    if args.exclude:
+        flt_exclude_type = MediaType(args.exclude)
+        return [m for m in media_files if m.type != flt_exclude_type]
 
     return media_files
 
@@ -232,7 +255,7 @@ def main():
     media_files = scan_for_media_files(args.source)
     #classify_media_files(media_files)
 
-    media_files = apply_media_folders(media_files, args)
+    media_files = apply_media_folders_filter(media_files, args)
 
     # check free space
     check_free_space(args.backup, media_files)
@@ -243,7 +266,7 @@ def main():
     duplicates = find_duplicates(media_files)    
 
     # backup files
-    backup_files(media_files, args.backup)
+    backup_files(media_files, args.backup, args.dry_run)
 
     # calculate stats
     print_stats(media_files)
