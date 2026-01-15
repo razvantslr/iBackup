@@ -1,22 +1,68 @@
 import sys
 import shutil
 import time
+import argparse
 from pathlib import Path
 from collections import defaultdict
 
-from scanner import *
+from scanner import scan_for_media_files, bytes_to_gb, MediaType
 from db import init_db, get_indexed_file, upsert_file
 from hashing import compute_blake3_hash
 from backup import build_backup_path, file_exists, copy_file
 
 
 def parse_args():
-    if len(sys.argv) < 3:
-        print("Usage: python main.py <source_path> <backup_path>")
-        sys.exit(1)
-    source = Path(sys.argv[1]).resolve()
-    backup = Path(sys.argv[2]).resolve()
-    return source, backup
+    parser = argparse.ArgumentParser(
+        prog="iBackup",
+        description="A tool to backup and organize media files."
+    )
+
+    parser.add_argument(
+        "--source",
+        type=Path,
+        required=True,
+        help="Path to the source directory containing media files."
+    )
+
+    parser.add_argument(
+        "--backup",
+        type=Path,
+        required=True,
+        help="Path to the backup directory where media files will be copied."
+    )
+
+    parser.add_argument(
+        "--only",
+        choices=[type.value for type in MediaType],
+        help="Only process media files of the specified type."
+    )
+
+    #todo: add --exclude and --include options
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true", 
+        help="Perform a trial run without making any changes."
+    )
+
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output."
+    )
+
+    args = parser.parse_args()
+
+    args.source = args.source.resolve() # eg. from "./media" to "C:/media"
+    args.backup = args.backup.resolve()
+
+    # todo: add after exclude and include options implementation
+    # validation only one filter mode
+    #modes = [args.only, args.include, args.exclude]
+    #if sum(mode is not None for mode in modes) > 1: # todo: refactor more readable like this: 
+    #    parser.error("Only one of --only, --include, or --exclude can be specified.")
+
+    return args
 
 def validate_path(path):
     if not path.exists():
@@ -32,44 +78,15 @@ def print_free_space(path):
 def check_free_space(backup_path, media_files):
     print(f"Checking free space on {backup_path} ...")
 
+    if not media_files:
+        raise ValueError("No media files to process.")
+
     required_size = sum(m.size_bytes for m in media_files)
     backup_free = shutil.disk_usage(backup_path.drive).free
     if required_size > backup_free:
         raise ValueError("Not enough free space on backup drive")
     
     print("Sufficient free space on backup drive")
-
-def scan_for_media_files(path):
-    print(f"Scanning {path} for media files ...")
-    
-    media_files = []
-    for item in path.rglob('*'):
-        if not item.is_file():
-            continue
-        ext = item.suffix.lower()
-        if ext not in SUPPORTED_MEDIA_EXT:
-            continue
-
-        if ext in SUPPORTED_IMAGE_EXT:
-            type = 'image'
-        elif ext in SUPPORTED_VIDEO_EXT:
-            type = 'video'
-        media = MediaFile(
-            path=str(item),
-            extension=ext,
-            type=type,
-            size_bytes=item.stat().st_size,
-        )
-        media_files.append(media)
-
-    # logging
-    print(f"Collected {len(media_files)} media files\n")    
-    print("Files sanity check:")
-    for media in media_files[:5]:
-        print(media)
-    print("\n")
-
-    return media_files
 
 def compute_hashes(media_files):
     print("Computing hashes for media files ...")
@@ -167,10 +184,10 @@ def print_stats(media_files):
         total_files += 1 
         total_size += media.size_bytes
 
-        if media.type == 'image':
+        if media.type == MediaType.IMAGE or media.type == MediaType.SCREENSHOT:
             image_files += 1
             image_size += media.size_bytes
-        elif media.type == 'video':
+        elif media.type == MediaType.VIDEO:
             video_files += 1
             video_size += media.size_bytes 
 
@@ -184,31 +201,41 @@ def print_stats(media_files):
     print(f"Images size :  {bytes_to_gb(image_size):.2f} GB")
     print(f"Videos size :  {bytes_to_gb(video_size):.2f} GB")
 
+def apply_media_folders(media_files, args):
+    if args.only:
+        only_type = MediaType(args.only) # convert string to MediaType
+        return [m for m in media_files if m.type == only_type] # filter by type
+
+    # todo: implement include and exclude filters
+
+    return media_files
+
 def classify_media_files(media_files):
+
     return
 
 def main():
     print("iBackup starting...")
     
-    source_path, backup_path = parse_args()
+    args = parse_args()
     try:
-        validate_path(source_path)
-        validate_path(backup_path)
+        validate_path(args.source)
+        validate_path(args.backup)
     except ValueError as e: 
         print("error:", e)
         sys.exit(1)
 
-    print_free_space(source_path)
-    print_free_space(backup_path)
+    print_free_space(args.source)
+    print_free_space(args.backup)
 
     #scan for media files
-    media_files = scan_for_media_files(source_path)
+    media_files = scan_for_media_files(args.source)
+    #classify_media_files(media_files)
 
-    classify_media_files(media_files)
+    media_files = apply_media_folders(media_files, args)
 
     # check free space
-    check_free_space(backup_path, media_files)
-
+    check_free_space(args.backup, media_files)
     # compute hashes
     compute_hashes(media_files)
 
@@ -216,7 +243,7 @@ def main():
     duplicates = find_duplicates(media_files)    
 
     # backup files
-    backup_files(media_files, backup_path)
+    backup_files(media_files, args.backup)
 
     # calculate stats
     print_stats(media_files)
