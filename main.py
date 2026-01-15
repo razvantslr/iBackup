@@ -51,13 +51,13 @@ def scan_for_media_files(path):
             continue
 
         if ext in SUPPORTED_IMAGE_EXT:
-            media_type = 'image'
+            type = 'image'
         elif ext in SUPPORTED_VIDEO_EXT:
-            media_type = 'video'
+            type = 'video'
         media = MediaFile(
             path=str(item),
             extension=ext,
-            media_type=media_type,
+            type=type,
             size_bytes=item.stat().st_size,
         )
         media_files.append(media)
@@ -167,10 +167,10 @@ def print_stats(media_files):
         total_files += 1 
         total_size += media.size_bytes
 
-        if media.media_type == 'image':
+        if media.type == 'image':
             image_files += 1
             image_size += media.size_bytes
-        elif media.media_type == 'video':
+        elif media.type == 'video':
             video_files += 1
             video_size += media.size_bytes 
 
@@ -183,6 +183,9 @@ def print_stats(media_files):
     print(f"Total size :  {bytes_to_gb(total_size):.2f} GB")
     print(f"Images size :  {bytes_to_gb(image_size):.2f} GB")
     print(f"Videos size :  {bytes_to_gb(video_size):.2f} GB")
+
+def classify_media_files(media_files):
+    return
 
 def main():
     print("iBackup starting...")
@@ -200,6 +203,8 @@ def main():
 
     #scan for media files
     media_files = scan_for_media_files(source_path)
+
+    classify_media_files(media_files)
 
     # check free space
     check_free_space(backup_path, media_files)

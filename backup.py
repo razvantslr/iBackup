@@ -9,9 +9,11 @@ def get_file_date(path: str):
 
 def build_backup_path(base_dest, media):
     date = get_file_date(media.path)
-    year = date.strftime("%Y")
+    year = date.strftime("%Y")      # 2024
     month = date.strftime("%m_%B")  # 07_July
-    dest_dir = Path(base_dest) / year / month
+    type = media.type               # image / video / screenshot
+
+    dest_dir = Path(base_dest) / year / month / type
     dest_dir.mkdir(parents=True, exist_ok=True)
     return dest_dir
 
