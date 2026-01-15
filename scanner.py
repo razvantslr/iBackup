@@ -114,8 +114,11 @@ def scan_for_media_files(path):
             size_bytes=item.stat().st_size,
         )
         media_files.append(media)
-        # logging
-        print(f"\nCollected {len(media_files)} media files\n")    
-        print("\nFiles sanity check:")
-        for media in media_files[:5]:
-            print(media)
+
+    # logging
+    print(f"\nCollected {len(media_files)} media files\n")    
+    print("\nFiles sanity check:")
+    for media in media_files[:5]:
+        print(media)
+
+    return media_files
