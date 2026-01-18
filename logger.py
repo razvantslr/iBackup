@@ -1,9 +1,14 @@
 import logging
 
 def logger_init(verbose):
-    level = logging.DEBUG if verbose else logging.INFO
+    # root logger level (all libs)
     logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s]: %(message)s"
+        level=logging.INFO,   # <-- CHEIA
+        format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d: %(message)s"
     )
-    return logging.getLogger("iBackup")
+
+    # app log level (only iBackup)
+    logger = logging.getLogger("iBackup")
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    #return logging.getLogger("iBackup")

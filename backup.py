@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
+logger = logging.getLogger("iBackup")
 
 def get_file_date(path: str):
     stat = Path(path).stat()
@@ -49,6 +50,6 @@ def backup_files(media_files, path):
             seen_hashes.add(media.hash)
             copied += 1
         except Exception as e:
-            logging.error("error backing up", media.path, ":", e)
+            logger.error("error backing up {media.path}: {e}")
 
-    logging.info(f"Backup complete. copied=[{copied}], skipped=[{skipped}]")
+    logger.info(f"Backup complete. copied=[{copied}], skipped=[{skipped}]")

@@ -6,6 +6,8 @@ from pathlib import Path
 from PIL import Image
 from PIL.ExifTags import TAGS
 
+logger = logging.getLogger("iBackup")
+
 # constants.py
 SUPPORTED_IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.heic'}
 SUPPORTED_VIDEO_EXT = {'.mp4', '.mov'}
@@ -116,10 +118,10 @@ def scan_for_media_files(path):
         )
         media_files.append(media)
 
-    # logging
-    logging.info(f"Collected {len(media_files)} media files")    
-    logging.debug("Files sanity check:")
+    # logger
+    logger.info(f"Collected {len(media_files)} media files")    
+    logger.debug("Files sanity check:")
     for media in media_files[:5]:
-        logging.debug(media)
+        logger.debug(media)
 
     return media_files

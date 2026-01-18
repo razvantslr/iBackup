@@ -13,6 +13,8 @@ from backup import build_backup_path, file_exists, copy_file
 from logger import logger_init
 from duplicate import find_duplicates
 
+logger = logging.getLogger("iBackup")
+
 def parse_args():
     
     parser = argparse.ArgumentParser(
@@ -85,14 +87,14 @@ def validate_path(path):
         raise ValueError(f"error: {path} does not exist")
     if not path.is_dir():
         raise ValueError(f"error: {path} not a directory")
-    logging.info(f"Validated path: {path}")
+    logger.info(f"Validated path: {path}")
 
 def print_free_space(path):
     free_space = shutil.disk_usage(path.drive).free / (1024 ** 3)
-    logging.info(f"Free space {path.drive}: {free_space:.2f} GB")
+    logger.info(f"Free space {path.drive}: {free_space:.2f} GB")
 
 def check_free_space(backup_path, media_files):
-    logging.info(f"Checking free space on {backup_path} ...")
+    logger.info(f"Checking free space on {backup_path} ...")
 
     if not media_files:
         raise ValueError("No media files to process.")
@@ -102,10 +104,10 @@ def check_free_space(backup_path, media_files):
     if required_size > backup_free:
         raise ValueError("Not enough free space on backup drive")
     
-    logging.info("Sufficient free space on backup drive")
+    logger.info("Sufficient free space on backup drive")
 
 def backup_files(media_files, path, dry_run=False):
-    logging.info(f"Backing up media files to {path}...")
+    logger.info(f"Backing up media files to {path}...")
 
     backup_path = path
     copied = 0
@@ -126,15 +128,15 @@ def backup_files(media_files, path, dry_run=False):
         # copy file once
         try:
             if dry_run:
-                logging.debug(f"[dry-run] would copy {media.path} to {dest_dir}")
+                logger.debug(f"[dry-run] would copy {media.path} to {dest_dir}")
             else:
                 copy_file(media, dest_dir)
             seen_hashes.add(media.hash)
             copied += 1
         except Exception as e:
-            logging.error("error backing up", media.path, ":", e)
+            logger.error("error backing up", media.path, ":", e)
 
-    logging.info(f"Backup complete. copied=[{copied}], skipped=[{skipped}]") #todo: size skipped
+    logger.info(f"Backup complete. copied=[{copied}], skipped=[{skipped}]") #todo: size skipped
 
 def print_stats(media_files):
     total_files = 0 
@@ -155,15 +157,15 @@ def print_stats(media_files):
             video_files += 1
             video_size += media.size_bytes 
 
-    logging.info("Scan summary:")
-    logging.info(f"Total media files : {total_files}")
-    logging.info(f"Images           : {image_files}")
-    logging.info(f"Videos           : {video_files}")
+    logger.info("Scan summary:")
+    logger.info(f"Total media files : {total_files}")
+    logger.info(f"Images           : {image_files}")
+    logger.info(f"Videos           : {video_files}")
 
-    logging.info(f"Size summary:")
-    logging.info(f"Total size :  {bytes_to_gb(total_size):.2f} GB")
-    logging.info(f"Images size :  {bytes_to_gb(image_size):.2f} GB")
-    logging.info(f"Videos size :  {bytes_to_gb(video_size):.2f} GB")
+    logger.info(f"Size summary:")
+    logger.info(f"Total size :  {bytes_to_gb(total_size):.2f} GB")
+    logger.info(f"Images size :  {bytes_to_gb(image_size):.2f} GB")
+    logger.info(f"Videos size :  {bytes_to_gb(video_size):.2f} GB")
 
 def apply_media_folders_filter(media_files, args):
     if args.only:
@@ -187,8 +189,9 @@ def classify_media_files(media_files):
 def main():
     args = parse_args()
     logger_init(args.verbose)
-    
-    logging.info("iBackup starting...")
+
+
+    logger.info("iBackup starting...")
 
     try:
         validate_path(args.source)
@@ -225,4 +228,4 @@ if __name__ == "__main__":
     start = time.perf_counter()
     main()
     elapsed = time.perf_counter() - start
-    logging.info(f"Elapsed time: {elapsed:.2f} seconds")
+    logger.info(f"Elapsed time: {elapsed:.2f} seconds")
