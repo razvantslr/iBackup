@@ -69,6 +69,7 @@ def parse_args():
         action="store_true",
         help="Enable verbose output."
     )
+    # TODO: add optional file handler (--log-file)
 
     args = parser.parse_args()
 
@@ -83,11 +84,12 @@ def parse_args():
     return args
 
 def validate_path(path):
+    logger.debug(f"Validating path: {path}")
     if not path.exists():
         raise ValueError(f"error: {path} does not exist")
     if not path.is_dir():
         raise ValueError(f"error: {path} not a directory")
-    logger.info(f"Validated path: {path}")
+    logger.debug(f"Validated")
 
 def print_free_space(path):
     free_space = shutil.disk_usage(path.drive).free / (1024 ** 3)
@@ -117,10 +119,12 @@ def backup_files(media_files, path, dry_run=False):
     for media in media_files:
         # file already exists in backup
         if file_exists(backup_path, media):
+            logger.debug(f"Skip, already exists: {media.path} ")
             skipped += 1
             continue
         # duplicate file based on hash
         if media.hash in seen_hashes:
+            logger.debug(f"Skip, duplicate hash: {media.path} ")
             skipped += 1
             continue
         # build destination path
@@ -128,15 +132,15 @@ def backup_files(media_files, path, dry_run=False):
         # copy file once
         try:
             if dry_run:
-                logger.debug(f"[dry-run] would copy {media.path} to {dest_dir}")
+                logger.debug(f"[DRY] Would copy {media.path} to {dest_dir}")
             else:
                 copy_file(media, dest_dir)
             seen_hashes.add(media.hash)
             copied += 1
         except Exception as e:
-            logger.error("error backing up", media.path, ":", e)
+            logger.error(f"Error backing up {media.path}: {e}")
 
-    logger.info(f"Backup complete. copied=[{copied}], skipped=[{skipped}]") #todo: size skipped
+    logger.info(f"Backup complete: copied=[{copied}], skipped=[{skipped}]") #todo: size skipped
 
 def print_stats(media_files):
     total_files = 0 
@@ -158,14 +162,14 @@ def print_stats(media_files):
             video_size += media.size_bytes 
 
     logger.info("Scan summary:")
-    logger.info(f"Total media files : {total_files}")
+    logger.info(f"Total media files: {total_files}")
     logger.info(f"Images           : {image_files}")
     logger.info(f"Videos           : {video_files}")
 
     logger.info(f"Size summary:")
     logger.info(f"Total size :  {bytes_to_gb(total_size):.2f} GB")
-    logger.info(f"Images size :  {bytes_to_gb(image_size):.2f} GB")
-    logger.info(f"Videos size :  {bytes_to_gb(video_size):.2f} GB")
+    logger.info(f"Images size:  {bytes_to_gb(image_size):.2f} GB")
+    logger.info(f"Videos size:  {bytes_to_gb(video_size):.2f} GB")
 
 def apply_media_folders_filter(media_files, args):
     if args.only:
@@ -197,7 +201,7 @@ def main():
         validate_path(args.source)
         validate_path(args.backup)
     except ValueError as e: 
-        print("error:", e)
+        logger.error("error:", e)
         sys.exit(1)
 
     print_free_space(args.source)
