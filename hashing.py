@@ -1,7 +1,10 @@
+import logging
 from blake3 import blake3
 from pathlib import Path
 
 from db import init_db, get_indexed_file, upsert_file
+
+logger = logging.getLogger("iBackup")
 
 
 def compute_blake3_hash(file_path: str, chunk_size=1024 * 1024) -> str:
@@ -12,7 +15,7 @@ def compute_blake3_hash(file_path: str, chunk_size=1024 * 1024) -> str:
     return hasher.hexdigest()
 
 def compute_hashes(media_files):
-    print("\nComputing hashes for media files ...")
+    logger.info("Computing hashes for media files ...")
     
     total = len(media_files)
     conn = init_db()
@@ -29,14 +32,14 @@ def compute_hashes(media_files):
         try:
             media.hash = compute_blake3_hash(media.path)
         except Exception as e:
-            print("error computhing hash for", media.path, ":", e)
+            logger.error("error computhing hash for", media.path, ":", e)
             continue
 
         upsert_file(conn, media)
 
         if index % 10 == 0 or index == total:
-            print(f"[{index}/{total}] hashed")
+            logger.info(f"[{index}/{total}] hashed")
     
-    print("\nHash sanity check:")
+    logger.debug("Hash sanity check:")
     for media in media_files[:5]:
-        print(media.hash, media.path)
+        logger.debug("{media.hash} {media.path}")

@@ -1,22 +1,29 @@
+import logging
 from collections import defaultdict
 
+logger = logging.getLogger("iBackup")
+
 def find_duplicates(media_files):
-    # find duplicates
+    logger.info("Finding duplicate media files ...")
+    
     duplicates = defaultdict(list)
     for media in media_files:
         if media.hash is None:
             continue
         duplicates[media.hash].append(media)
+
     duplicate_groups = {
         h: files for h, files in duplicates.items()
         if len(files) > 1
     }
 
-    print("\nDuplicates files:")
+    logger.info("Duplicate files:")
     if not duplicate_groups:
-        print("no dulicates found.")
+        logger.info("No duplicates found.")
     else:
         for h, files in duplicate_groups.items():
-            print(f"\nHash: {h}")
+            logger.info(f"Hash: {h}")
             for f in files:
-                print(f" {f.path}")
+                logger.info(f" {f.path}")
+    
+    return duplicate_groups

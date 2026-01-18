@@ -1,9 +1,12 @@
+import logging
 from dataclasses import dataclass
 from typing import Optional
 from enum import Enum
 from pathlib import Path
 from PIL import Image
 from PIL.ExifTags import TAGS
+
+logger = logging.getLogger("iBackup")
 
 # constants.py
 SUPPORTED_IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.heic'}
@@ -115,10 +118,10 @@ def scan_for_media_files(path):
         )
         media_files.append(media)
 
-    # logging
-    print(f"\nCollected {len(media_files)} media files\n")    
-    print("\nFiles sanity check:")
+    # logger
+    logger.info(f"Collected {len(media_files)} media files")    
+    logger.debug("Files sanity check:")
     for media in media_files[:5]:
-        print(media)
+        logger.debug(media)
 
     return media_files
