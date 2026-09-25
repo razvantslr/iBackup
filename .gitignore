@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.pyo
+*.py[cod]
 
 # Virtual env
 .venv/
@@ -12,7 +13,12 @@ venv/
 
 # OS
 .DS_Store
-ibackup.db
 
-# inoutput 
+# Backup index and working data
+*.db
+*.db-wal
+*.db-shm
+.ibackup/
+
+# in/output
 TEST/

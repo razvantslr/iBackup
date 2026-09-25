@@ -1,0 +1,338 @@
+"""Teste cap-coada pe pipeline: import, duplicate, grupuri, locatii deduse."""
+from __future__ import annotations
+
+import unittest
+from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from ibackup import pipeline
+from ibackup.config import Config
+from ibackup.db import Database
+from ibackup.geocode import Geocoder
+from ibackup.reporter import Reporter
+from ibackup.sources.folder import FolderSource
+from tests import synth
+
+BARCELONA = (41.3901, 2.1701)
+BUCURESTI = (44.4268, 26.1025)
+
+CITIES = [
+    ("Barcelona", "ES", 41.39, 2.17, 1620000),
+    ("Bucuresti", "RO", 44.44, 26.10, 1830000),
+]
+
+
+class PipelineTestCase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.src = self.root / "sursa"
+        self.dest = self.root / "backup"
+        self.src.mkdir()
+        self.cfg = Config(dest=self.dest)
+        self.report = Reporter(quiet=True)
+
+    def tearDown(self):
+        self.report.close()
+        self._tmp.cleanup()
+
+    # --- ajutoare ---------------------------------------------------------
+
+    def photo(self, name, taken_at, gps=None, payload=None, subdir=""):
+        target = self.src / subdir / name if subdir else self.src / name
+        payload = payload if payload is not None else name.encode() * 40
+        return synth.write_photo(target, taken_at, gps, payload=payload)
+
+    def run_import(self, *, dry_run=False, cfg=None, source_dir=None):
+        cfg = cfg or self.cfg
+        with Database(cfg.db_path) as db:
+            geo = Geocoder(CITIES, radius_km=cfg.geo_radius_km,
+                           prefer=cfg.geo_prefer, aliases=cfg.geo_aliases)
+            source = FolderSource(source_dir or self.src, skip_dirs=cfg.skip_dirs)
+            importer = pipeline.Importer(cfg, db, geo, self.report, dry_run=dry_run)
+            stats = importer.import_source(source)
+            rows = [dict(r) for r in db.all_media()]
+        return stats, rows
+
+    def rel_paths(self):
+        return sorted(
+            p.relative_to(self.dest).as_posix()
+            for p in self.dest.rglob("*")
+            if p.is_file() and ".ibackup" not in p.parts
+        )
+
+
+class ImportTests(PipelineTestCase):
+    def test_sorts_by_year_month_and_place(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)
+        self.photo("IMG_0002.jpg", datetime(2024, 8, 3, 9, 0), BUCURESTI)
+        stats, rows = self.run_import()
+
+        self.assertEqual(stats.imported, 2)
+        self.assertEqual(stats.duplicates, 0)
+        self.assertEqual(stats.errors, 0)
+        self.assertEqual(self.rel_paths(), [
+            "2024/08_august/Bucuresti/IMG_0002.jpg",
+            "2025/01_ianuarie/Barcelona/IMG_0001.jpg",
+        ])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["place"], "Bucuresti")
+        self.assertEqual(rows[0]["taken_at_source"], "exif:DateTimeOriginal")
+
+    def test_source_files_are_never_touched(self):
+        path = self.photo("IMG_0001.jpg", datetime(2025, 1, 14), BARCELONA)
+        before = path.read_bytes()
+        self.run_import()
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_second_run_finds_only_duplicates(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)
+        self.photo("IMG_0002.jpg", datetime(2025, 1, 14, 18, 35), BARCELONA)
+        self.run_import()
+        stats, rows = self.run_import()
+
+        self.assertEqual(stats.imported, 0)
+        self.assertEqual(stats.duplicates, 2)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(self.rel_paths()), 2)
+
+    def test_same_photo_from_another_folder_is_a_duplicate(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)
+        self.run_import()
+
+        other = self.root / "backup_vechi"
+        synth.write_photo(other / "vacanta" / "copie.jpg",
+                          datetime(2025, 1, 14, 18, 30), BARCELONA,
+                          payload=b"IMG_0001.jpg" * 40)
+        stats, rows = self.run_import(source_dir=other)
+        self.assertEqual(stats.imported, 0)
+        self.assertEqual(stats.duplicates, 1)
+        self.assertEqual(len(rows), 1)
+
+    def test_different_photos_with_the_same_name_both_survive(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA,
+                   payload=b"primul" * 50, subdir="a")
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 31), BARCELONA,
+                   payload=b"al doilea" * 50, subdir="b")
+        stats, rows = self.run_import()
+
+        self.assertEqual(stats.imported, 2)
+        self.assertEqual(self.rel_paths(), [
+            "2025/01_ianuarie/Barcelona/IMG_0001.jpg",
+            "2025/01_ianuarie/Barcelona/IMG_0001_2.jpg",
+        ])
+        self.assertEqual(len({r["rel_path"] for r in rows}), 2)
+
+    def test_photo_without_gps_goes_to_unknown_place(self):
+        self.photo("IMG_0009.jpg", datetime(2021, 6, 1, 12, 0), None)
+        stats, rows = self.run_import(cfg=Config(dest=self.dest, infer_enabled=False))
+        self.assertEqual(stats.no_gps, 1)
+        self.assertEqual(self.rel_paths(), ["2021/06_iunie/Fara_locatie/IMG_0009.jpg"])
+
+    def test_dry_run_writes_nothing(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14), BARCELONA)
+        stats, rows = self.run_import(dry_run=True)
+        self.assertEqual(stats.imported, 1)
+        self.assertEqual(self.rel_paths(), [])
+        self.assertEqual(rows, [])
+
+    def test_dry_run_detects_duplicates_within_the_same_run(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14), BARCELONA,
+                   payload=b"acelasi" * 50, subdir="a")
+        self.photo("IMG_0002.jpg", datetime(2025, 1, 14), BARCELONA,
+                   payload=b"acelasi" * 50, subdir="b")
+        stats, _ = self.run_import(dry_run=True)
+        self.assertEqual(stats.imported, 1)
+        self.assertEqual(stats.duplicates, 1)
+
+    def test_non_media_files_are_ignored(self):
+        (self.src / "note.txt").write_text("nimic de vazut", encoding="utf-8")
+        (self.src / "gol.jpg").write_bytes(b"")
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14), BARCELONA)
+        stats, _ = self.run_import()
+        self.assertEqual(stats.scanned, 1)
+        self.assertEqual(stats.imported, 1)
+
+
+class LivePhotoTests(PipelineTestCase):
+    def test_photo_and_movie_stay_together(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)
+        (self.src / "IMG_0001.MOV").write_bytes(synth.build_mov(
+            created="2025-01-14T18:30:00+0100", iso6709="+41.3901+002.1701/"))
+        (self.src / "IMG_0001.AAE").write_text("<xml/>", encoding="utf-8")
+
+        stats, rows = self.run_import()
+        self.assertEqual(stats.imported, 3)
+        self.assertEqual(stats.companions, 2)
+        self.assertEqual(self.rel_paths(), [
+            "2025/01_ianuarie/Barcelona/IMG_0001.AAE",
+            "2025/01_ianuarie/Barcelona/IMG_0001.MOV",
+            "2025/01_ianuarie/Barcelona/IMG_0001.jpg",
+        ])
+        self.assertEqual(len({r["group_key"] for r in rows}), 1)
+
+    def test_companions_follow_a_renamed_primary(self):
+        # Un fisier cu acelasi nume exista deja la destinatie, deci poza devine
+        # IMG_0001_2.jpg - filmul ei trebuie sa se numeasca la fel.
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA,
+                   payload=b"vechi" * 50, subdir="a")
+        self.run_import()
+
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 31), BARCELONA,
+                   payload=b"nou" * 50, subdir="b")
+        (self.src / "b" / "IMG_0001.MOV").write_bytes(synth.build_mov(
+            created="2025-01-14T18:31:00+0100", iso6709="+41.3901+002.1701/"))
+
+        self.run_import()
+        paths = self.rel_paths()
+        self.assertIn("2025/01_ianuarie/Barcelona/IMG_0001_2.jpg", paths)
+        self.assertIn("2025/01_ianuarie/Barcelona/IMG_0001_2.MOV", paths)
+
+    def test_standalone_movie_is_treated_as_a_video(self):
+        (self.src / "IMG_0007.MOV").write_bytes(synth.build_mov())
+        stats, rows = self.run_import()
+        self.assertEqual(stats.imported, 1)
+        self.assertEqual(rows[0]["kind"], "video")
+        self.assertEqual(rows[0]["rel_path"],
+                         "2019/07_iulie/Bucuresti/IMG_0007.MOV")
+
+
+class InferLocationTests(PipelineTestCase):
+    def test_location_is_inferred_from_a_photo_taken_nearby_in_time(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        self.photo("IMG_0002.jpg", datetime(2025, 1, 14, 19, 0), None)
+        stats, rows = self.run_import()
+
+        self.assertEqual(stats.inferred_places, 1)
+        self.assertEqual(self.rel_paths(), [
+            "2025/01_ianuarie/Barcelona/IMG_0001.jpg",
+            "2025/01_ianuarie/Barcelona/IMG_0002.jpg",
+        ])
+        inferred = [r for r in rows if r["filename"] == "IMG_0002.jpg"][0]
+        self.assertEqual(inferred["place"], "Barcelona")
+        self.assertEqual(inferred["place_source"], "inferred:time-neighbour")
+
+    def test_photo_too_far_in_time_keeps_unknown_place(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        self.photo("IMG_0002.jpg", datetime(2025, 1, 16, 12, 0), None)
+        stats, _ = self.run_import()
+        self.assertEqual(stats.inferred_places, 0)
+        self.assertIn("2025/01_ianuarie/Fara_locatie/IMG_0002.jpg", self.rel_paths())
+
+    def test_inference_can_be_disabled(self):
+        cfg = Config(dest=self.dest, infer_enabled=False)
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        self.photo("IMG_0002.jpg", datetime(2025, 1, 14, 19, 0), None)
+        stats, _ = self.run_import(cfg=cfg)
+        self.assertEqual(stats.inferred_places, 0)
+        self.assertIn("2025/01_ianuarie/Fara_locatie/IMG_0002.jpg", self.rel_paths())
+
+    def test_empty_folders_are_cleaned_up_after_a_move(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        self.photo("IMG_0002.jpg", datetime(2025, 1, 14, 19, 0), None)
+        self.run_import()
+        self.assertFalse((self.dest / "2025/01_ianuarie/Fara_locatie").exists())
+
+
+class VerifyAndReindexTests(PipelineTestCase):
+    def test_verify_passes_then_catches_damage(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)
+        self.run_import()
+
+        with Database(self.cfg.db_path) as db:
+            clean = pipeline.verify_backup(self.cfg, db, self.report, deep=True)
+        self.assertEqual(clean["missing"], 0)
+        self.assertEqual(clean["hash_mismatch"], 0)
+        self.assertEqual(clean["checked"], 1)
+
+        target = self.dest / "2025/01_ianuarie/Barcelona/IMG_0001.jpg"
+        data = bytearray(target.read_bytes())
+        data[-1] ^= 0xFF
+        target.write_bytes(bytes(data))
+        with Database(self.cfg.db_path) as db:
+            damaged = pipeline.verify_backup(self.cfg, db, self.report, deep=True)
+        self.assertEqual(damaged["hash_mismatch"], 1)
+
+    def test_verify_reports_missing_files(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14), BARCELONA)
+        self.run_import()
+        (self.dest / "2025/01_ianuarie/Barcelona/IMG_0001.jpg").unlink()
+        with Database(self.cfg.db_path) as db:
+            stats = pipeline.verify_backup(self.cfg, db, self.report)
+        self.assertEqual(stats["missing"], 1)
+
+    def test_reindex_rebuilds_the_index(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)
+        self.photo("IMG_0002.jpg", datetime(2024, 8, 3, 9, 0), BUCURESTI)
+        self.run_import()
+
+        self.cfg.db_path.unlink()
+        for leftover in self.cfg.internal_dir.glob("index.db-*"):
+            leftover.unlink()
+
+        with Database(self.cfg.db_path) as db:
+            geo = Geocoder(CITIES)
+            stats = pipeline.reindex(self.cfg, db, geo, self.report)
+            rows = [dict(r) for r in db.all_media()]
+        self.assertEqual(stats["added"], 2)
+        self.assertEqual({r["place"] for r in rows}, {"Barcelona", "Bucuresti"})
+
+        # Dupa reindexare, un import al acelorasi poze nu mai copiaza nimic.
+        stats, _ = self.run_import()
+        self.assertEqual(stats.imported, 0)
+        self.assertEqual(stats.duplicates, 2)
+
+
+class SourceSelectionTests(PipelineTestCase):
+    def test_refuses_source_equal_to_destination(self):
+        from ibackup.sources import build_source
+        with self.assertRaises(ValueError) as ctx:
+            build_source(str(self.dest), self.cfg)
+        self.assertIn("reindex", str(ctx.exception))
+
+    def test_refuses_source_inside_the_backup(self):
+        from ibackup.sources import build_source
+        inner = self.dest / "2025"
+        inner.mkdir(parents=True)
+        with self.assertRaises(ValueError):
+            build_source(str(inner), self.cfg)
+
+    def test_refuses_backup_inside_the_source(self):
+        from ibackup.sources import build_source
+        cfg = Config(dest=self.src / "backup")
+        with self.assertRaises(ValueError):
+            build_source(str(self.src), cfg)
+
+    def test_accepts_a_sibling_folder(self):
+        from ibackup.sources import build_source
+        source = build_source(str(self.src), self.cfg)
+        self.assertEqual(source.kind, "folder")
+        source.close()
+
+
+class RobustnessTests(PipelineTestCase):
+    def test_corrupt_file_is_imported_using_the_filename_date(self):
+        (self.src / "IMG_20230415_120000.jpg").write_bytes(b"\xff\xd8" + b"\x00" * 200)
+        stats, rows = self.run_import()
+        self.assertEqual(stats.errors, 0)
+        self.assertEqual(stats.imported, 1)
+        self.assertEqual(rows[0]["rel_path"],
+                         "2023/04_aprilie/Fara_locatie/IMG_20230415_120000.jpg")
+
+    def test_no_leftover_part_files(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14), BARCELONA)
+        self.run_import()
+        self.assertEqual(list(self.dest.rglob("*.part")), [])
+
+    def test_staging_is_emptied(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14), BARCELONA)
+        self.run_import()
+        staging = self.cfg.staging_dir
+        if staging.exists():
+            self.assertEqual(list(staging.iterdir()), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

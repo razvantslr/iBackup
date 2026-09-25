@@ -1,0 +1,9 @@
+# Nucleul nu are dependinte: totul e stdlib Python 3.11+.
+# Pentru iPhone, alege una dintre variantele de mai jos.
+
+# AFC - recomandat (mai rapid, fisiere originale, citiri partiale).
+# Cere si aplicatia "Apple Devices" din Microsoft Store (driverul USB).
+# pymobiledevice3>=4.0
+
+# MTP - merge cu driverul din Windows, fara iTunes, dar e mai lent.
+# pywin32>=306
