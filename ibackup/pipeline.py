@@ -554,6 +554,53 @@ def _prune_empty(folder: Path, stop_at: Path) -> None:
         folder = folder.parent
 
 
+def reorganize(cfg: Config, db: Database, report: Reporter,
+               dry_run: bool = False) -> dict:
+    """Re-apply the current layout rules to everything already in the backup.
+
+    This is what makes the layout settings reversible: change screenshot_dir,
+    language or video_subdir, run this, and the tree catches up. Only the folder
+    is recomputed - filenames are left alone, so organize.rename_with_timestamp
+    still applies to newly imported files only.
+    """
+    stats = {"checked": 0, "moved": 0, "missing": 0}
+    reserved: set[str] = set()
+    for row in list(db.all_media()):
+        stats["checked"] += 1
+        taken = None
+        if row["taken_at"]:
+            try:
+                taken = datetime.fromisoformat(row["taken_at"])
+            except ValueError:
+                taken = None
+        new_dir = organize.dest_dir(taken, row["place"], row["kind"], cfg)
+        new_rel = (new_dir / row["filename"]).as_posix()
+        if new_rel == row["rel_path"]:
+            continue
+
+        old_abs = cfg.dest / row["rel_path"]
+        if not old_abs.is_file():
+            stats["missing"] += 1
+            report.warn(f"missing from the backup: {row['rel_path']}")
+            continue
+
+        new_abs = unique_path(cfg.dest / new_rel, reserved)
+        rel_final = new_abs.relative_to(cfg.dest).as_posix()
+        reserved.add(str(new_abs).lower())
+        report.detail(f"{row['rel_path']} -> {rel_final}")
+        if not dry_run:
+            new_abs.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(old_abs, new_abs)
+            db.set_rel_path(int(row["id"]), rel_final)
+            _prune_empty(old_abs.parent, cfg.dest)
+        stats["moved"] += 1
+        report.progress(stats["checked"], None, "checked")
+
+    if not dry_run:
+        db.conn.commit()
+    return stats
+
+
 def verify_backup(cfg: Config, db: Database, report: Reporter,
                   deep: bool = False) -> dict:
     """Compare the index against what is actually on the SSD."""

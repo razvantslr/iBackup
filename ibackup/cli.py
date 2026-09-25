@@ -210,6 +210,19 @@ def cmd_relocate(args) -> int:
         report.close()
 
 
+def cmd_reorganize(args) -> int:
+    cfg = _config_from_args(args)
+    report = _reporter(cfg, args, "reorganize")
+    try:
+        with Database(cfg.db_path) as db:
+            stats = pipeline.reorganize(cfg, db, report, dry_run=args.dry_run)
+        title = "Reorganize (DRY-RUN, nothing moved):" if args.dry_run else "Reorganize:"
+        report.summary(title, stats)
+        return 0
+    finally:
+        report.close()
+
+
 def cmd_reindex(args) -> int:
     cfg = _config_from_args(args)
     report = _reporter(cfg, args, "reindex")
@@ -326,6 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("relocate", help="guess missing locations and move the files")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_relocate)
+
+    p = sub.add_parser("reorganize",
+                       help="re-apply the layout rules to the whole backup")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_reorganize)
 
     p = sub.add_parser("reindex", help="rebuild the index from the existing files")
     p.set_defaults(func=cmd_reindex)

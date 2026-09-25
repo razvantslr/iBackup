@@ -214,6 +214,10 @@ class Database:
             (place, place_source, lat, lon, gps_source, rel_path, media_id),
         )
 
+    def set_rel_path(self, media_id: int, rel_path: str) -> None:
+        self.conn.execute("UPDATE media SET rel_path = ? WHERE id = ?",
+                          (rel_path, media_id))
+
     def rel_path_exists(self, rel_path: str) -> bool:
         row = self.conn.execute(
             "SELECT 1 FROM media WHERE rel_path = ? LIMIT 1", (rel_path,)

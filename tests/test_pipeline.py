@@ -489,6 +489,71 @@ class PartialCollisionTests(PipelineTestCase):
         self.assertEqual(stats.duplicates, 1)
 
 
+class ReorganizeTests(PipelineTestCase):
+    def seed(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        synth.write_png(self.src / "Screenshot 2025-01-14 at 19.00.00.png")
+        self.run_import()
+
+    def reorganize(self, cfg, dry_run=False):
+        with Database(cfg.db_path) as db:
+            stats = pipeline.reorganize(cfg, db, self.report, dry_run=dry_run)
+            rows = [dict(r) for r in db.all_media()]
+        return stats, rows
+
+    def test_moving_screenshots_into_the_month_folder(self):
+        self.seed()
+        cfg = Config(dest=self.dest, screenshot_dir="./Screenshots")
+        stats, rows = self.reorganize(cfg)
+
+        self.assertEqual(stats["moved"], 1)
+        self.assertEqual(stats["missing"], 0)
+        self.assertIn("2025/01_ianuarie/Screenshots/"
+                      "Screenshot_2025-01-14_at_19.00.00.png", self.rel_paths())
+        self.assertFalse((self.dest / "Screenshots").exists())
+        paths = {r["rel_path"] for r in rows}
+        self.assertTrue(all((self.dest / p).is_file() for p in paths))
+
+    def test_switching_the_month_language(self):
+        self.seed()
+        cfg = Config(dest=self.dest, language="en")
+        stats, _ = self.reorganize(cfg)
+
+        self.assertEqual(stats["moved"], 2)
+        self.assertIn("2025/01_january/Barcelona/IMG_0001.jpg", self.rel_paths())
+        self.assertFalse((self.dest / "2025" / "01_ianuarie").exists())
+
+    def test_dry_run_moves_nothing(self):
+        self.seed()
+        before = self.rel_paths()
+        cfg = Config(dest=self.dest, screenshot_dir="./Screenshots")
+        stats, rows = self.reorganize(cfg, dry_run=True)
+
+        self.assertEqual(stats["moved"], 1)
+        self.assertEqual(self.rel_paths(), before)
+        self.assertEqual({r["rel_path"] for r in rows}, set(before))
+
+    def test_running_it_twice_changes_nothing_the_second_time(self):
+        self.seed()
+        cfg = Config(dest=self.dest, screenshot_dir="./Screenshots")
+        self.reorganize(cfg)
+        stats, _ = self.reorganize(cfg)
+        self.assertEqual(stats["moved"], 0)
+
+    def test_unchanged_settings_move_nothing(self):
+        self.seed()
+        stats, _ = self.reorganize(self.cfg)
+        self.assertEqual(stats["moved"], 0)
+
+    def test_a_file_missing_from_disk_is_reported_not_crashed_on(self):
+        self.seed()
+        (self.dest / "2025/01_ianuarie/Barcelona/IMG_0001.jpg").unlink()
+        cfg = Config(dest=self.dest, language="en")
+        stats, _ = self.reorganize(cfg)
+        self.assertEqual(stats["missing"], 1)
+        self.assertEqual(stats["moved"], 1)  # the screenshot still moved
+
+
 class VerifyAndReindexTests(PipelineTestCase):
     def test_verify_passes_then_catches_damage(self):
         self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)
