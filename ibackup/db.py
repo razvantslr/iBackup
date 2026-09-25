@@ -327,6 +327,24 @@ class Database:
     def all_media(self):
         return self.conn.execute("SELECT * FROM media ORDER BY rel_path")
 
+    def iter_media(self, batch: int = 500):
+        """Walk every row without holding the whole table in memory.
+
+        Paging by id rather than streaming one cursor means the caller can
+        update rows as it goes - which reorganize and regeocode both do - since
+        an update never moves a row's id.
+        """
+        last_id = 0
+        while True:
+            rows = list(self.conn.execute(
+                "SELECT * FROM media WHERE id > ? ORDER BY id LIMIT ?",
+                (last_id, batch),
+            ))
+            if not rows:
+                return
+            yield from rows
+            last_id = int(rows[-1]["id"])
+
     def count_media(self) -> int:
         return int(self.conn.execute("SELECT COUNT(*) FROM media").fetchone()[0])
 

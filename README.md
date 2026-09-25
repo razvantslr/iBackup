@@ -220,9 +220,36 @@ folder gets its real city name.
 python -m unittest discover -s tests -t .
 ```
 
-123 tests, no dependencies. The test files (JPEG with EXIF, PNG, HEIC, MOV) are
+145 tests, no dependencies. The test files (JPEG with EXIF, PNG, HEIC, MOV) are
 built byte by byte in `tests/synth.py`, so the tests exercise exactly our parsers
 without keeping real photos in the repo.
+
+## Performance
+
+`tools/benchmark.py` builds a synthetic camera roll of realistic shape and times
+each phase. On a 10,749-file library (6157 photos, 1946 screenshots, 928 videos,
+749 Live Photo pairs, 220 duplicates), on Windows with small payloads so the
+per-file overhead is what shows:
+
+| phase | time | files/s | peak memory |
+|---|---|---|---|
+| cold import | 1m 26s | 125 | 7.4 MB |
+| re-import, source cache | 2s | 4400 | 2.5 MB |
+| re-import, `--no-cache` | 9s | 1139 | 2.6 MB |
+| `verify --deep` | 3s | 2863 | 0.8 MB |
+| `regeocode` (no-op) | 1s | 5378 | 1.5 MB |
+
+Memory is flat in the size of the library for every phase, so a much larger roll
+costs time but not space. A re-import is 35x faster than the first one, which is
+the source cache doing its job.
+
+```bash
+python tools/benchmark.py --files 10000
+```
+
+Real photos are megabytes rather than kilobytes, so a real first import is bound
+by disk throughput rather than by these numbers; the point of the small payloads
+is to measure everything else.
 
 ## What changed in v0.2
 

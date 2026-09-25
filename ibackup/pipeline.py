@@ -597,7 +597,7 @@ def reorganize(cfg: Config, db: Database, report: Reporter,
     """
     stats = {"checked": 0, "moved": 0, "missing": 0}
     reserved: set[str] = set()
-    for row in list(db.all_media()):
+    for row in db.iter_media():
         stats["checked"] += 1
         taken = _parse_taken(row["taken_at"])
         new_dir = organize.dest_dir(taken, row["place"], row["kind"], cfg)
@@ -636,7 +636,7 @@ def regeocode(cfg: Config, db: Database, geocoder: Geocoder, report: Reporter,
 
     resolved: dict[tuple[float, float], tuple[str, str]] = {}
     reserved: set[str] = set()
-    for row in list(db.all_media()):
+    for row in db.iter_media():
         stats["checked"] += 1
         lat, lon = row["lat"], row["lon"]
         if lat is None or lon is None:
