@@ -1,4 +1,4 @@
-"""Configurarea tool-ului: valori implicite, fisier TOML, suprascrieri din CLI."""
+"""Configuration: defaults, the TOML file, and command-line overrides."""
 from __future__ import annotations
 
 import tomllib
@@ -12,35 +12,35 @@ CONFIG_NAME = "config.toml"
 
 @dataclass
 class Config:
-    # Unde traieste backup-ul. Tot restul se aseaza relativ la el.
+    # Where the backup lives. Everything else is relative to it.
     dest: Path
 
-    # Organizare
+    # Layout
     language: str = "ro"
     unknown_place: str = "Fara_locatie"
-    video_subdir: str = ""          # gol = filmele stau langa poze
+    video_subdir: str = ""          # empty: videos sit next to photos
     rename_with_timestamp: bool = False
 
-    # Duplicate
+    # Duplicates
     partial_chunk_kb: int = 64
     confirm_with_full_md5: bool = True
-    # Confirmarea cere continutul integral. Pentru iPhone asta ar insemna sa
-    # descarcam fisierul tocmai ca sa aflam ca il avem deja, asa ca implicit
-    # avem incredere in dimensiune + MD5 partial la sursele de retea.
+    # Confirming needs the whole file. For an iPhone that would mean downloading
+    # a photo just to learn we already have it, so by default we trust size plus
+    # the partial MD5 for remote sources.
     strict_remote_dedup: bool = False
 
-    # Geolocatie
+    # Geolocation
     geo_radius_km: float = 25.0
     geo_prefer: str = "population"  # population | nearest
     geo_dataset: str = ""
     geo_cluster_decimals: int = 2
     geo_aliases: dict[str, str] = field(default_factory=dict)
 
-    # Deducerea locatiei din pozele vecine in timp
+    # Guessing a location from photos taken close in time
     infer_enabled: bool = True
     infer_window_hours: float = 3.0
 
-    # Ce luam
+    # What we take
     include_videos: bool = True
     include_sidecars: bool = True
     skip_dirs: list[str] = field(default_factory=lambda: [
@@ -48,7 +48,7 @@ class Config:
         "@eaDir", ".Trash", ".Trashes",
     ])
 
-    # Siguranta
+    # Safety
     verify_after_copy: bool = True
 
     @property
@@ -125,7 +125,7 @@ def _apply_table(cfg: Config, data: dict) -> Config:
 
 
 def load_config(dest: Path | None = None, config_file: Path | None = None) -> Config:
-    """Incarca configul. Ordinea: valori implicite < fisier TOML < argument --dest."""
+    """Defaults < TOML file < the --dest argument."""
     data: dict = {}
     if config_file is not None:
         with open(config_file, "rb") as fh:
@@ -141,51 +141,51 @@ def load_config(dest: Path | None = None, config_file: Path | None = None) -> Co
         base_dest = Path(str(data["dest"]))
     if base_dest is None:
         raise ValueError(
-            "Nu stiu unde e backup-ul. Foloseste --dest E:/Backup/Poze sau "
-            "pune dest = \"E:/Backup/Poze\" in config.toml."
+            "I do not know where the backup lives. Pass --dest E:/Backup/Photos "
+            "or set dest = \"E:/Backup/Photos\" in config.toml."
         )
 
     cfg = Config(dest=Path(base_dest))
     cfg = _apply_table(cfg, data)
-    if dest is not None:  # argumentul explicit are ultimul cuvant
+    if dest is not None:  # an explicit argument always wins
         cfg = replace(cfg, dest=Path(dest))
     return cfg
 
 
 def write_default_config(cfg: Config) -> Path:
-    """Scrie un config.toml comentat langa baza de date, daca nu exista deja."""
+    """Write a commented config.toml next to the index, unless one exists."""
     path = cfg.config_path
     if path.exists():
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     dest_text = str(cfg.dest).replace("\\", "/")
     path.write_text(
-        f'''# Configurarea backup-ului de poze. Orice optiune poate fi data si din CLI.
+        f'''# iBackup configuration. Every option can also be given on the command line.
 dest = "{dest_text}"
 
 [organize]
-language = "ro"              # numele lunilor: ro sau en
+language = "ro"               # language of the month folder names: ro or en
 unknown_place = "Fara_locatie"
-video_subdir = ""            # ex. "Video" daca vrei filmele separat
-rename_with_timestamp = false
+video_subdir = ""             # e.g. "Video" to keep videos separate
+rename_with_timestamp = false # true => 20250114_183042_IMG_0001.heic
 
 [dedup]
-partial_chunk_kb = 64        # cat citim din capul si coada fisierului
-confirm_with_full_md5 = true # confirma duplicatele cu MD5 complet
-strict_remote_dedup = false  # true = confirma cu MD5 complet si pentru iPhone
-                             # (mai sigur, dar descarca fiecare duplicat)
+partial_chunk_kb = 64         # how much we read from the head and tail
+confirm_with_full_md5 = true  # confirm duplicates with a full MD5
+strict_remote_dedup = false   # true = confirm for the iPhone too, which means
+                              # downloading every duplicate to check it
 
 [geo]
-radius_km = 25.0             # in ce raza cautam un oras
-prefer = "population"        # population = orasul mare din zona; nearest = cel mai apropiat
-dataset = ""                 # calea catre cities5000.txt, daca l-ai instalat
-cluster_decimals = 2         # rotunjirea coordonatelor inainte de cautare (~1 km)
+radius_km = 25.0              # how far away a city may be
+prefer = "population"         # population = the big city nearby; nearest = closest
+dataset = ""                  # path to cities5000.txt, if installed
+cluster_decimals = 2          # coordinate rounding before lookup (~1 km)
 
 [geo.aliases]
 # Bucuresti = "Acasa"
 
 [infer]
-enabled = true               # deduce locatia din pozele apropiate in timp
+enabled = true                # guess a location from photos close in time
 window_hours = 3.0
 
 [include]

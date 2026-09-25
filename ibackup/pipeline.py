@@ -1,14 +1,14 @@
-"""Motorul propriu-zis: scaneaza sursa, elimina duplicatele, asaza fisierele.
+"""The engine: scan a source, drop duplicates, file everything into place.
 
-Traseul unui fisier:
-  1. amprenta rapida (dimensiune + MD5 partial)
-  2. cautare in index -> daca exista deja, e duplicat si il sarim
-  3. citirea metadatelor (data + GPS)
-  4. GPS -> nume de oras (geocodare offline)
-  5. copiere atomica in <an>/<luna>/<locatie>/ si inregistrare in index
+A file's journey:
+  1. quick fingerprint (size + partial MD5)
+  2. look it up in the index -> if it is already there, it is a duplicate
+  3. read its metadata (date + GPS)
+  4. GPS -> city name (offline geocoding)
+  5. atomic copy into <year>/<month>/<place>/ and a row in the index
 
-Nimic nu se sterge vreodata din sursa. Scrierea la destinatie se face prin
-fisier temporar + rename, deci o intrerupere nu lasa fisiere pe jumatate.
+Nothing is ever removed from the source. Writes go through a temporary file
+followed by a rename, so an interrupted run leaves no half-written files.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ _PRIMARY_ORDER = {"photo": 0, "video": 1, "sidecar": 2, "other": 3}
 
 @dataclass
 class Anchor:
-    """Ce a decis fisierul principal dintr-un grup (poza unui Live Photo)."""
+    """What the primary file of a group decided (the photo of a Live Photo)."""
     dest_dir: PurePosixPath
     stem: str
     taken_at: datetime | None
@@ -61,13 +61,13 @@ class Stats:
 
 
 def pick_primary(group: list[SourceItem]) -> SourceItem:
-    """Intr-un Live Photo, poza comanda; filmul si .AAE o urmeaza."""
+    """In a Live Photo the still image leads; the movie and .AAE follow it."""
     return min(group, key=lambda it: (_PRIMARY_ORDER.get(kind_for_name(it.name), 9),
                                       it.name.lower()))
 
 
 def group_items(items):
-    """Grupeaza fisierele cu acelasi nume de baza din acelasi folder."""
+    """Group files that share a base name inside the same folder."""
     buffer: dict[tuple[str, str], list[SourceItem]] = {}
     current_dir = None
     for item in items:
@@ -97,8 +97,8 @@ class Importer:
         self.limit = limit
         self.stats = Stats()
         self.run_id: int | None = None
-        self._taken: set[str] = set()          # cai rezervate in rularea curenta
-        self._dry_seen: dict[tuple[int, str], str] = {}  # duplicate in dry-run
+        self._taken: set[str] = set()           # paths reserved by this run
+        self._dry_seen: dict[tuple[int, str], str] = {}  # dry-run duplicates
         self.unknown_place = organize.place_folder(None, cfg)
 
     # --- API ---------------------------------------------------------------
@@ -109,19 +109,19 @@ class Importer:
             self.run_id = self.db.start_run(source.label, str(self.cfg.dest), mode)
             self.cfg.staging_dir.mkdir(parents=True, exist_ok=True)
 
-        self.report.info(f"Sursa: {source.label}")
-        self.report.info(f"Destinatie: {self.cfg.dest}"
-                         + ("  [DRY-RUN, nu se scrie nimic]" if self.dry_run else ""))
+        self.report.info(f"Source: {source.label}")
+        self.report.info(f"Destination: {self.cfg.dest}"
+                         + ("  [DRY-RUN, nothing is written]" if self.dry_run else ""))
 
         try:
             for group in group_items(source.iter_items()):
                 if self.limit is not None and self.stats.scanned >= self.limit:
-                    self.report.info(f"M-am oprit la limita de {self.limit} fisiere.")
+                    self.report.info(f"Stopping at the limit of {self.limit} files.")
                     break
                 self._process_group(source, group)
                 self.report.progress(self.stats.scanned, source.count_hint(),
-                                     f"{self.stats.imported} noi, "
-                                     f"{self.stats.duplicates} duplicate")
+                                     f"{self.stats.imported} new, "
+                                     f"{self.stats.duplicates} duplicates")
         finally:
             if not self.dry_run:
                 self.db.conn.commit()
@@ -136,7 +136,7 @@ class Importer:
             self.db.finish_run(self.run_id, self.stats.as_dict())
         return self.stats
 
-    # --- grup --------------------------------------------------------------
+    # --- group -------------------------------------------------------------
 
     def _process_group(self, source: Source, group: list[SourceItem]) -> None:
         primary = pick_primary(group)
@@ -163,7 +163,7 @@ class Importer:
                     pass
             return None
 
-    # --- fisier ------------------------------------------------------------
+    # --- single file -------------------------------------------------------
 
     def _process_item(self, source: Source, item: SourceItem,
                       group_key: str | None, anchor: Anchor | None) -> Anchor | None:
@@ -194,7 +194,7 @@ class Importer:
 
     def _find_duplicate(self, item: SourceItem, fp: Fingerprint,
                         local_path: Path | None, source: Source):
-        """Intoarce randul din index care are acelasi continut, sau None."""
+        """The indexed row with the same content, or None."""
         if self.dry_run:
             seen = self._dry_seen.get(fp.as_key())
             if seen is not None:
@@ -210,9 +210,9 @@ class Importer:
         if not self.cfg.confirm_with_full_md5:
             return rows[0]
 
-        # Confirmarea cere continutul integral. Daca sursa e telefonul, ar
-        # insemna sa descarcam fisierul tocmai ca sa aflam ca il avem deja;
-        # o facem doar daca utilizatorul a cerut explicit --strict-dedup.
+        # Confirming needs the whole file. If the source is the phone, that would
+        # mean downloading the photo just to learn we already have it, so we only
+        # do it when the user asked for --strict-dedup.
         if local_path is None and not self.cfg.strict_remote_dedup:
             return rows[0]
         if local_path is None:
@@ -231,11 +231,11 @@ class Importer:
                 self.db.set_full_md5(row["id"], known)
             if known == candidate_md5:
                 return row
-        return None  # aceeasi amprenta partiala, continut diferit: nu e duplicat
+        return None  # same partial fingerprint, different content: not a duplicate
 
     def _on_duplicate(self, item: SourceItem, fp: Fingerprint, row) -> Anchor | None:
         self.stats.duplicates += 1
-        self.report.detail(f"duplicat: {item.name} -> {row['rel_path']}")
+        self.report.detail(f"duplicate: {item.name} -> {row['rel_path']}")
         if not self.dry_run:
             self.db.record_duplicate(self.run_id, item, int(row["id"]),
                                      fp.size, fp.partial_md5)
@@ -261,7 +261,7 @@ class Importer:
             lat=get("lat"), lon=get("lon"), gps_source=get("gps_source") or "",
         )
 
-    # --- scrierea la destinatie --------------------------------------------
+    # --- writing to the destination ----------------------------------------
 
     def _ingest(self, item: SourceItem, local: Localized, fp: Fingerprint,
                 group_key: str | None, anchor: Anchor | None) -> Anchor:
@@ -276,7 +276,7 @@ class Importer:
             meta.taken_at_source = "source-mtime"
 
         if anchor is not None:
-            # Fisierele pereche merg langa poza lor, cu aceleasi date.
+            # Paired files go next to their photo, carrying the same data.
             taken_at = anchor.taken_at or meta.taken_at
             place, place_source = anchor.place, anchor.place_source
             lat, lon = (meta.lat, meta.lon) if meta.has_gps else (anchor.lat, anchor.lon)
@@ -290,8 +290,8 @@ class Importer:
             rel_dir = organize.dest_dir(taken_at, place, meta.kind, self.cfg)
             stem_override = None
 
-        # Fisierele pereche (.AAE) n-au metadate proprii, deci nu le numaram
-        # ca lipsuri - ar umfla degeaba statisticile.
+        # Sidecars have no metadata of their own, so counting them as gaps would
+        # only inflate the statistics.
         if meta.kind in ("photo", "video"):
             if not meta.taken_at_source.startswith(("exif", "qt")):
                 self.stats.no_exif_date += 1
@@ -307,12 +307,12 @@ class Importer:
             self.stats.imported += 1
             self.stats.bytes_copied += fp.size
             self._dry_seen[fp.as_key()] = rel_final
-            self.report.detail(f"ar copia: {item.name} -> {rel_final}")
+            self.report.detail(f"would copy: {item.name} -> {rel_final}")
         else:
             self._place_file(local, dest_abs, fp, item)
             self.stats.imported += 1
             self.stats.bytes_copied += fp.size
-            self.report.detail(f"copiat: {item.name} -> {rel_final}")
+            self.report.detail(f"copied: {item.name} -> {rel_final}")
             self.db.insert_media(
                 size=fp.size, partial_md5=fp.partial_md5, full_md5=None,
                 rel_path=rel_final, filename=dest_abs.name, kind=meta.kind,
@@ -333,13 +333,13 @@ class Importer:
 
     def _place_file(self, local: Localized, dest_abs: Path, fp: Fingerprint,
                     item: SourceItem) -> None:
-        """Scriere atomica: intai .part, apoi rename. Verificam ce a ajuns pe disc."""
+        """Atomic write: .part first, then rename. We check what landed on disk."""
         dest_abs.parent.mkdir(parents=True, exist_ok=True)
         temp = dest_abs.with_name(dest_abs.name + ".part")
         if temp.exists():
             temp.unlink()
         if local.is_temp:
-            os.replace(local.path, temp)   # staging e pe acelasi volum: instant
+            os.replace(local.path, temp)   # staging is on the same volume: instant
             local.claimed = True
         else:
             shutil.copy2(local.path, temp)
@@ -350,8 +350,8 @@ class Importer:
             if written != fp.size or check != fp.partial_md5:
                 temp.unlink(missing_ok=True)
                 raise IOError(
-                    f"verificarea a esuat dupa copiere ({item.name}): "
-                    f"{written} octeti vs {fp.size} asteptati"
+                    f"verification failed after copying {item.name}: "
+                    f"{written} bytes vs {fp.size} expected"
                 )
         if item.mtime:
             try:
@@ -385,14 +385,14 @@ class Importer:
                 pass
 
 
-# --- faze care ruleaza si separat ------------------------------------------
+# --- phases that can also run on their own ---------------------------------
 
 def infer_locations(cfg: Config, db: Database, report: Reporter,
                     dry_run: bool = False) -> int:
-    """Muta pozele fara GPS in folderul locatiei deduse din pozele vecine in timp.
+    """Move photos without GPS into the location guessed from their neighbours.
 
-    Mutam doar fisiere aflate acum in folderul "fara locatie", deci faza asta nu
-    poate strica o sortare facuta pe baza unor coordonate reale.
+    Only files currently sitting in the "no location" folder are moved, so this
+    phase can never disturb a placement based on real coordinates.
     """
     unknown = organize.place_folder(None, cfg)
     rows = db.media_without_place(unknown)
@@ -413,12 +413,12 @@ def infer_locations(cfg: Config, db: Database, report: Reporter,
             continue
         old_abs = cfg.dest / row["rel_path"]
         if not old_abs.is_file():
-            report.warn(f"lipseste din backup: {row['rel_path']}")
+            report.warn(f"missing from the backup: {row['rel_path']}")
             continue
         new_abs = unique_path(cfg.dest / new_rel)
         rel_final = new_abs.relative_to(cfg.dest).as_posix()
-        report.detail(f"locatie dedusa: {row['rel_path']} -> {rel_final} "
-                      f"(dupa {neighbor['filename']})")
+        report.detail(f"location guessed: {row['rel_path']} -> {rel_final} "
+                      f"(after {neighbor['filename']})")
         if not dry_run:
             new_abs.parent.mkdir(parents=True, exist_ok=True)
             os.replace(old_abs, new_abs)
@@ -436,7 +436,7 @@ def infer_locations(cfg: Config, db: Database, report: Reporter,
 
 
 def _prune_empty(folder: Path, stop_at: Path) -> None:
-    """Sterge folderele ramase goale dupa o mutare, fara sa urce peste radacina."""
+    """Remove folders left empty by a move, without climbing past the root."""
     try:
         folder = folder.resolve()
         stop_at = stop_at.resolve()
@@ -459,32 +459,32 @@ def _prune_empty(folder: Path, stop_at: Path) -> None:
 
 def verify_backup(cfg: Config, db: Database, report: Reporter,
                   deep: bool = False) -> dict:
-    """Compara indexul cu ce e efectiv pe SSD."""
+    """Compare the index against what is actually on the SSD."""
     stats = {"checked": 0, "missing": 0, "size_mismatch": 0, "hash_mismatch": 0}
     for row in db.all_media():
         stats["checked"] += 1
         path = cfg.dest / row["rel_path"]
         if not path.is_file():
             stats["missing"] += 1
-            report.warn(f"lipseste: {row['rel_path']}")
+            report.warn(f"missing: {row['rel_path']}")
             continue
         size = path.stat().st_size
         if size != row["size"]:
             stats["size_mismatch"] += 1
-            report.warn(f"dimensiune diferita: {row['rel_path']}")
+            report.warn(f"different size: {row['rel_path']}")
             continue
         if deep:
             if partial_md5(path, size, cfg.partial_chunk) != row["partial_md5"]:
                 stats["hash_mismatch"] += 1
-                report.warn(f"continut schimbat: {row['rel_path']}")
-        report.progress(stats["checked"], None, "verificate")
+                report.warn(f"content changed: {row['rel_path']}")
+        report.progress(stats["checked"], None, "checked")
     return stats
 
 
 def reindex(cfg: Config, db: Database, geocoder: Geocoder, report: Reporter) -> dict:
-    """Reconstruieste indexul din fisierele deja aflate in backup.
+    """Rebuild the index from the files already sitting in the backup.
 
-    Folositor daca index.db se pierde: nu muta nimic, doar recitieste ce exista.
+    Useful if index.db is lost: nothing is moved, the tree is only re-read.
     """
     stats = {"seen": 0, "added": 0, "already": 0}
     root = cfg.dest
@@ -519,6 +519,6 @@ def reindex(cfg: Config, db: Database, geocoder: Geocoder, report: Reporter) -> 
                 source_name=name, imported_at=utc_now(), run_id=None,
             )
             stats["added"] += 1
-            report.progress(stats["seen"], None, "reindexate")
+            report.progress(stats["seen"], None, "reindexed")
     db.conn.commit()
     return stats

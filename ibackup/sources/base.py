@@ -1,9 +1,9 @@
-"""Interfata comuna pentru sursele de poze: folder local sau iPhone pe USB.
+"""The common interface for photo sources: a local folder, or an iPhone on USB.
 
-Ideea centrala e `localize`: indiferent de unde vine fisierul, pipeline-ul
-primeste o cale locala pe care o poate citi normal. Pentru un folder e chiar
-fisierul original; pentru iPhone e o copie temporara in zona de staging de pe
-SSD, ca mutarea la destinatie sa fie apoi instantanee (acelasi volum).
+The central idea is `localize`: wherever a file comes from, the pipeline gets a
+local path it can read normally. For a folder that is the original file; for an
+iPhone it is a temporary copy in the staging area on the SSD, so that moving it
+to its final place afterwards is instant (same volume).
 """
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ from typing import Iterator
 
 @dataclass
 class SourceItem:
-    ref: str              # identificator unic si stabil in sursa (calea completa)
-    name: str             # numele fisierului
-    rel_dir: str          # folderul relativ in sursa, doar informativ
+    ref: str              # unique, stable id within the source (the full path)
+    name: str             # the file name
+    rel_dir: str          # folder inside the source, informational only
     size: int
     mtime: float | None = None
-    kind: str = "folder"  # tipul sursei, salvat in baza de date
+    kind: str = "folder"  # source type, stored in the index
 
     @property
     def stem(self) -> str:
@@ -38,29 +38,29 @@ class SourceItem:
 class Localized:
     path: Path
     is_temp: bool
-    claimed: bool = False  # pipeline-ul a mutat fisierul, nu-l mai stergem
+    claimed: bool = False  # the pipeline moved the file; do not delete it
 
 
 class Source:
-    """Sursa de fisiere. Subclasele implementeaza iter_items si _fetch."""
+    """A source of files. Subclasses implement iter_items and _fetch."""
 
     kind = "base"
-    label = "sursa"
+    label = "source"
     supports_random_read = False
 
     def iter_items(self) -> Iterator[SourceItem]:
         raise NotImplementedError
 
     def count_hint(self) -> int | None:
-        """Numarul aproximativ de fisiere, daca se poate afla ieftin."""
+        """Roughly how many files there are, when that is cheap to know."""
         return None
 
     def read_range(self, item: SourceItem, offset: int, length: int) -> bytes:
-        """Citire partiala, doar pentru sursele cu supports_random_read."""
+        """Partial read, only for sources with supports_random_read."""
         raise NotImplementedError
 
     def _fetch(self, item: SourceItem, target: Path) -> None:
-        """Aduce fisierul la calea locala `target`."""
+        """Bring the file to the local path `target`."""
         raise NotImplementedError
 
     @contextmanager

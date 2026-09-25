@@ -1,9 +1,9 @@
-"""Citire de containere ISO-BMFF: HEIC/HEIF si QuickTime/MP4.
+"""Reading ISO-BMFF containers: HEIC/HEIF and QuickTime/MP4.
 
-HEIC-ul si MOV-ul de pe iPhone folosesc acelasi format de "cutii" (boxes), asa
-ca un singur parser acopera si pozele, si filmele. Din HEIC scoatem blocul EXIF
-(care e apoi dat pe mana lui exif.py), iar din MOV/MP4 scoatem data creerii si
-coordonatele ISO 6709 scrise de Apple.
+An iPhone's HEIC and MOV files use the same box format, so one parser covers
+both photos and videos. From HEIC we extract the EXIF block (which is then
+handed to exif.py); from MOV/MP4 we take the creation date and the ISO 6709
+coordinates Apple writes.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import re
 import struct
 from datetime import datetime, timedelta, timezone
 
-# QuickTime numara secundele de la 1 ianuarie 1904, UTC.
+# QuickTime counts seconds from 1 January 1904, UTC.
 QT_EPOCH = datetime(1904, 1, 1, tzinfo=timezone.utc)
 
 MAX_BOXES_PER_LEVEL = 4096
@@ -26,19 +26,19 @@ class Box:
 
     def __init__(self, type_: bytes, start: int, end: int):
         self.type = type_
-        self.start = start  # primul octet de payload
-        self.end = end      # exclusiv
+        self.start = start  # first payload byte
+        self.end = end      # exclusive
 
     @property
     def size(self) -> int:
         return self.end - self.start
 
-    def __repr__(self) -> str:  # pragma: no cover - doar pentru depanare
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
         return f"Box({self.type!r}, {self.start}-{self.end})"
 
 
 def iter_boxes(fh, start: int, end: int):
-    """Enumereaza cutiile dintre doua offset-uri din fisier."""
+    """Walk the boxes between two file offsets."""
     pos = start
     seen = 0
     while pos + 8 <= end and seen < MAX_BOXES_PER_LEVEL:
@@ -82,7 +82,7 @@ def read_ftyp(fh, file_size: int) -> bytes | None:
 
 
 def container_kind(fh, file_size: int) -> str | None:
-    """'heif', 'quicktime' sau None, dupa marca din ftyp."""
+    """'heif', 'quicktime' or None, based on the brand in ftyp."""
     brand = read_ftyp(fh, file_size)
     if brand is None:
         return None
@@ -93,10 +93,10 @@ def container_kind(fh, file_size: int) -> str | None:
     return None
 
 
-# --- HEIF: localizarea elementului Exif -------------------------------------
+# --- HEIF: locating the Exif item -------------------------------------------
 
 def _parse_iinf(fh, box: Box) -> dict[int, bytes]:
-    """{item_ID: item_type} din cutia iinf."""
+    """{item_ID: item_type} from the iinf box."""
     fh.seek(box.start)
     head = fh.read(4)
     if len(head) < 4:
@@ -138,7 +138,7 @@ def _parse_iinf(fh, box: Box) -> dict[int, bytes]:
 
 
 def _parse_iloc(fh, box: Box) -> dict[int, tuple[int, list[tuple[int, int]]]]:
-    """{item_ID: (construction_method, [(offset, length), ...])} din iloc."""
+    """{item_ID: (construction_method, [(offset, length), ...])} from iloc."""
     fh.seek(box.start)
     data = fh.read(box.size)
     if len(data) < 8:
@@ -204,11 +204,11 @@ def _parse_iloc(fh, box: Box) -> dict[int, tuple[int, list[tuple[int, int]]]]:
 
 
 def heif_exif_block(fh, file_size: int) -> bytes | None:
-    """Intoarce blocul TIFF/EXIF dintr-un fisier HEIC/HEIF/AVIF."""
+    """Return the TIFF/EXIF block from a HEIC/HEIF/AVIF file."""
     meta = find_box(fh, 0, file_size, b"meta")
     if meta is None:
         return None
-    # meta e FullBox: sarim peste version+flags inainte de copii.
+    # meta is a FullBox: skip version+flags before its children.
     children_start = meta.start + 4
     iinf = find_box(fh, children_start, meta.end, b"iinf")
     iloc = find_box(fh, children_start, meta.end, b"iloc")
@@ -242,7 +242,7 @@ def heif_exif_block(fh, file_size: int) -> bytes | None:
         payload = b"".join(chunks)
         if len(payload) < 8:
             continue
-        # Primii 4 octeti = offset-ul catre antetul TIFF.
+        # The first 4 bytes hold the offset to the TIFF header.
         (tiff_offset,) = struct.unpack_from(">I", payload, 0)
         start = 4 + tiff_offset
         if 0 <= start < len(payload):
@@ -274,7 +274,7 @@ def parse_iso6709(text: str):
 
 
 def _parse_udta_text(fh, box: Box) -> str | None:
-    """Atomii de tip (c)day / (c)xyz: [len u16][lang u16][text]."""
+    """Atoms such as (c)day / (c)xyz: [len u16][lang u16][text]."""
     fh.seek(box.start)
     data = fh.read(min(box.size, 1024))
     if len(data) < 4:
@@ -285,7 +285,7 @@ def _parse_udta_text(fh, box: Box) -> str | None:
 
 
 def _parse_keys_ilst(fh, meta_start: int, meta_end: int) -> dict[str, str]:
-    """Metadatele moderne Apple: cutia keys da numele, ilst da valorile."""
+    """Modern Apple metadata: the keys box names them, ilst holds the values."""
     keys_box = find_box(fh, meta_start, meta_end, b"keys")
     ilst_box = find_box(fh, meta_start, meta_end, b"ilst")
     if keys_box is None or ilst_box is None:
@@ -327,7 +327,7 @@ def _parse_keys_ilst(fh, meta_start: int, meta_end: int) -> dict[str, str]:
 
 
 def _meta_children_start(fh, box: Box) -> int:
-    """moov/meta e FullBox in ISO-BMFF, dar nu si in QuickTime clasic."""
+    """moov/meta is a FullBox in ISO-BMFF but not in classic QuickTime."""
     fh.seek(box.start)
     head = fh.read(12)
     if len(head) >= 8 and head[4:8].isalpha():
@@ -336,11 +336,11 @@ def _meta_children_start(fh, box: Box) -> int:
 
 
 def quicktime_metadata(fh, file_size: int) -> dict:
-    """Data creerii si coordonatele dintr-un MOV/MP4.
+    """Creation date and coordinates from a MOV/MP4.
 
-    Preferam 'creationdate' de la Apple si atomul (c)day pentru ca includ
-    offset-ul de fus orar, deci ne dau ora locala reala a filmarii. mvhd e
-    ultima varianta: acolo timpul e UTC si nu stim unde era telefonul.
+    Apple's 'creationdate' and the (c)day atom are preferred because they carry
+    a UTC offset, so they give the real local time of the recording. mvhd is the
+    last resort: its timestamp is UTC and we do not know where the phone was.
     """
     out: dict = {"taken_at": None, "taken_at_source": "", "gps": None,
                  "gps_source": "", "make": None, "model": None}
@@ -407,7 +407,7 @@ def _parse_mvhd(fh, box: Box):
 
 
 def _parse_iso_datetime(text: str):
-    """Accepta 2019-07-12T18:30:42+0300 si variantele ei."""
+    """Accepts 2019-07-12T18:30:42+0300 and its variants."""
     text = (text or "").strip()
     if not text:
         return None

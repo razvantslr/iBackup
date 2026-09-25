@@ -1,4 +1,4 @@
-"""Amprente de fisier: MD5 partial (rapid) + MD5 complet (confirmare)."""
+"""File fingerprints: a cheap partial MD5, plus a full MD5 for confirmation."""
 from __future__ import annotations
 
 import hashlib
@@ -12,11 +12,11 @@ READ_BLOCK = 1024 * 1024
 
 @dataclass(frozen=True)
 class Fingerprint:
-    """Identitatea rapida a unui fisier: dimensiune + MD5 peste cap si coada.
+    """A file's quick identity: size plus an MD5 over its head and tail.
 
-    Doua fisiere diferite pot teoretic sa aiba aceeasi amprenta partiala, de
-    aceea pipeline-ul confirma potrivirile cu MD5 complet inainte sa declare
-    un duplicat (vezi `dedup.confirm_with_full_md5` din config).
+    Two different files could in theory share a partial fingerprint, so the
+    pipeline confirms a match with a full MD5 before calling it a duplicate
+    (see `dedup.confirm_with_full_md5` in the config).
     """
 
     size: int
@@ -29,10 +29,10 @@ class Fingerprint:
 def partial_md5_from_reader(
     read_at: Callable[[int, int], bytes], size: int, chunk: int = DEFAULT_CHUNK
 ) -> str:
-    """MD5 peste primii si ultimii `chunk` octeti, folosind un cititor random-access.
+    """MD5 over the first and last `chunk` bytes, via a random-access reader.
 
-    `read_at(offset, length)` poate citi de pe disc sau direct de pe iPhone,
-    ceea ce ne lasa sa detectam duplicatele fara sa descarcam fisierul intreg.
+    `read_at(offset, length)` can read from disk or straight from the iPhone,
+    which lets us recognise a duplicate without downloading the whole file.
     """
     md5 = hashlib.md5()
     md5.update(str(size).encode("ascii"))

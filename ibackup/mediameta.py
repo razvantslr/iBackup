@@ -1,8 +1,9 @@
-"""Extragerea metadatelor de care depinde sortarea: cand si unde.
+"""Extracting the metadata the sorting depends on: when, and where.
 
-Ordinea de incredere pentru data este intotdeauna aceeasi: metadatele din
-fisier, apoi numele fisierului, apoi data de modificare. Salvam si eticheta
-sursei in baza de date, ca sa stim mai tarziu cat de sigura e sortarea unei poze.
+The order of trust for the date is always the same: what is inside the file,
+then the filename, then the modification time. The label of whichever source
+won is stored in the index, so we can tell later how confident a photo's
+placement really is.
 """
 from __future__ import annotations
 
@@ -23,13 +24,13 @@ VIDEO_EXT = {".mov", ".mp4", ".m4v", ".avi", ".3gp", ".3g2", ".mkv", ".mpg", ".m
 SIDECAR_EXT = {".aae", ".xmp"}
 ALL_EXT = PHOTO_EXT | VIDEO_EXT | SIDECAR_EXT
 
-# Cat citim din cap/coada cand cautam EXIF intr-un JPEG mare.
+# How much of a large JPEG we read while looking for its EXIF block.
 JPEG_HEAD = 512 * 1024
 
 
 @dataclass
 class MediaMeta:
-    taken_at: datetime | None = None          # ora locala, naiva
+    taken_at: datetime | None = None          # local time, naive
     taken_at_source: str = ""
     lat: float | None = None
     lon: float | None = None
@@ -37,6 +38,7 @@ class MediaMeta:
     kind: str = "other"                       # photo | video | sidecar | other
     make: str | None = None
     model: str | None = None
+    software: str | None = None
 
     @property
     def has_gps(self) -> bool:
@@ -58,12 +60,12 @@ def is_media_name(name: str) -> bool:
     return os.path.splitext(name)[1].lower() in ALL_EXT
 
 
-# --- data din numele fisierului --------------------------------------------
+# --- the date hidden in the filename ---------------------------------------
 
 _NAME_DATE = re.compile(
     r"(?<!\d)(19[7-9]\d|20[0-4]\d)[-_.:]?(0[1-9]|1[0-2])[-_.:]?(0[1-9]|[12]\d|3[01])"
-    # Separatorul dintre data si ora: un caracter, sau " at " / " la " din
-    # numele de screenshot-uri ("Screenshot 2023-05-01 at 12.33.44").
+    # The separator between date and time: one character, or the " at " / " la "
+    # used by screenshot names ("Screenshot 2023-05-01 at 12.33.44").
     r"(?:(?:[-_.:T ]|\s(?:at|la)\s)?([01]\d|2[0-3])[-_.:]?([0-5]\d)"
     r"(?:[-_.:]?([0-5]\d))?)?(?!\d)"
 )
@@ -71,7 +73,7 @@ _EPOCH_MS = re.compile(r"(?<!\d)(1[0-9]{9})(?:[0-9]{3})?(?!\d)")
 
 
 def datetime_from_name(name: str):
-    """Scoate data din nume: IMG_20190712_183042, 2019-07-12 18.30.42, IMG-20190712-WA0001."""
+    """Reads IMG_20190712_183042, 2019-07-12 18.30.42, IMG-20190712-WA0001."""
     match = _NAME_DATE.search(name)
     if match:
         year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
@@ -94,21 +96,21 @@ def datetime_from_name(name: str):
 
 
 def _to_local_naive(dt: datetime | None, assume_utc: bool = False):
-    """Aducem totul la ora locala de perete, fara fus, cum o vrem in foldere."""
+    """Everything becomes local wall-clock time, which is what folders want."""
     if dt is None:
         return None
     if dt.tzinfo is None:
         return dt
     if assume_utc:
         return dt.astimezone().replace(tzinfo=None)
-    # Offset-ul scris in fisier era deja ora locala de la locul filmarii.
+    # The offset stored in the file already described local time on location.
     return dt.replace(tzinfo=None)
 
 
-# --- extragerea propriu-zisa -----------------------------------------------
+# --- extraction -------------------------------------------------------------
 
 def _read_exif_block(path: Path, ext: str):
-    """Blocul TIFF/EXIF brut, indiferent de container."""
+    """The raw TIFF/EXIF block, whatever the container."""
     with path.open("rb") as fh:
         head = fh.read(16)
         fh.seek(0)
@@ -116,7 +118,7 @@ def _read_exif_block(path: Path, ext: str):
             return exif.exif_from_jpeg(fh.read(JPEG_HEAD))
         if head[:8] == b"\x89PNG\r\n\x1a\n":
             return exif.exif_from_png(fh.read(JPEG_HEAD))
-        if head[:2] in (b"II", b"MM"):  # TIFF, DNG si majoritatea RAW-urilor
+        if head[:2] in (b"II", b"MM"):  # TIFF, DNG and most RAW formats
             return fh.read(JPEG_HEAD)
         size = path.stat().st_size
         if isobmff.container_kind(fh, size) == "heif":
@@ -125,7 +127,7 @@ def _read_exif_block(path: Path, ext: str):
 
 
 def extract(path, *, use_filename: bool = True, use_mtime: bool = True) -> MediaMeta:
-    """Metadatele unui fisier local. Nu arunca niciodata pe fisiere stricate."""
+    """Metadata for a local file. Never raises on a damaged file."""
     path = Path(path)
     name = path.name
     ext = path.suffix.lower()
@@ -156,6 +158,7 @@ def extract(path, *, use_filename: bool = True, use_mtime: bool = True) -> Media
                     meta.lat, meta.lon = coords
                     meta.gps_source = "exif:GPS"
                 meta.make, meta.model = exif.exif_camera(tags)
+                meta.software = exif.exif_software(tags)
                 if meta.taken_at is None:
                     gps_dt = exif.exif_gps_datetime(tags)
                     if gps_dt is not None:

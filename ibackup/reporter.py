@@ -1,4 +1,4 @@
-"""Afisarea progresului si jurnalul fiecarei rulari."""
+"""Progress output and the per-run log file."""
 from __future__ import annotations
 
 import sys
@@ -20,9 +20,9 @@ class Reporter:
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             self._log = log_path.open("a", encoding="utf-8")
-            self._write_log(f"=== rulare noua {datetime.now().isoformat(timespec='seconds')} ===")
+            self._write_log(f"=== new run {datetime.now().isoformat(timespec='seconds')} ===")
 
-    # --- iesire ------------------------------------------------------------
+    # --- output ------------------------------------------------------------
 
     def _write_log(self, text: str) -> None:
         if self._log is not None:
@@ -42,13 +42,13 @@ class Reporter:
             print(text)
 
     def warn(self, text: str) -> None:
-        self._write_log("ATENTIE: " + text)
+        self._write_log("WARNING: " + text)
         if not self.quiet:
             self._clear_line()
             print(f"  ! {text}", file=sys.stderr)
 
     def error(self, text: str) -> None:
-        self._write_log("EROARE: " + text)
+        self._write_log("ERROR: " + text)
         self._clear_line()
         print(f"  x {text}", file=sys.stderr)
 
@@ -58,8 +58,8 @@ class Reporter:
             self._last_progress = 0.0
 
     def progress(self, done: int, total: int | None, label: str = "") -> None:
-        # In modul verbose fiecare fisier isi are randul lui; o bara de progres
-        # care se rescrie peste ele ar face iesirea ilizibila.
+        # In verbose mode every file gets its own line; a progress bar that
+        # rewrites over them would make the output unreadable.
         if self.quiet or self.verbose:
             return
         now = time.monotonic()
@@ -70,28 +70,28 @@ class Reporter:
             pct = 100.0 * done / total
             text = f"\r  {done}/{total} ({pct:.0f}%) {label}"
         else:
-            text = f"\r  {done} fisiere {label}"
+            text = f"\r  {done} files {label}"
         print(text[:78].ljust(78), end="", flush=True)
 
     def elapsed(self) -> float:
         return time.monotonic() - self.started
 
     LABELS = {
-        "scanned": "fisiere vazute in sursa",
-        "imported": "copiate in backup",
-        "duplicates": "duplicate sarite",
-        "companions": "din care fisiere pereche (Live Photo / .AAE)",
-        "no_exif_date": "fara data in metadate (am folosit nume/mtime)",
-        "no_gps": "fara coordonate GPS",
-        "inferred_places": "locatii deduse din pozele vecine",
-        "errors": "erori",
-        "checked": "fisiere verificate",
-        "missing": "lipsesc din backup",
-        "size_mismatch": "dimensiune diferita fata de index",
-        "hash_mismatch": "continut schimbat fata de index",
-        "seen": "fisiere gasite in backup",
-        "added": "adaugate in index",
-        "already": "erau deja in index",
+        "scanned": "files seen in the source",
+        "imported": "copied into the backup",
+        "duplicates": "duplicates skipped",
+        "companions": "of which paired files (Live Photo / .AAE)",
+        "no_exif_date": "no date in metadata (used filename/mtime)",
+        "no_gps": "without GPS coordinates",
+        "inferred_places": "locations guessed from neighbouring photos",
+        "errors": "errors",
+        "checked": "files checked",
+        "missing": "missing from the backup",
+        "size_mismatch": "size differs from the index",
+        "hash_mismatch": "content changed since indexing",
+        "seen": "files found in the backup",
+        "added": "added to the index",
+        "already": "already in the index",
     }
 
     def summary(self, title: str, stats: dict) -> None:
@@ -103,8 +103,8 @@ class Reporter:
             label = self.LABELS.get(key, key)
             lines.append(f"  {label:<48} {stats[key]}")
         if "bytes_copied" in stats:
-            lines.append(f"  {'total copiat':<48} {human_size(stats['bytes_copied'])}")
-        lines.append(f"  {'durata':<48} {human_duration(self.elapsed())}")
+            lines.append(f"  {'total copied':<48} {human_size(stats['bytes_copied'])}")
+        lines.append(f"  {'elapsed':<48} {human_duration(self.elapsed())}")
         text = "\n".join(lines)
         self._write_log(text)
         if not self.quiet:

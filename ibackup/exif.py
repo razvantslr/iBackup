@@ -1,15 +1,16 @@
-"""Parser EXIF pur-stdlib (TIFF/JPEG/PNG).
+"""A stdlib-only EXIF reader (TIFF/JPEG/PNG).
 
-Nu folosim Pillow ca sa nu depindem de wheel-uri binare: tot ce ne trebuie din
-EXIF sunt data si coordonatele GPS, iar TIFF e suficient de simplu cat sa-l
-citim direct. Parserul e defensiv - un fisier stricat intoarce valori goale in
-loc sa arunce, pentru ca un JPEG corupt nu are voie sa opreasca backup-ul.
+Pillow is avoided so the tool has no binary wheels to install: all we need from
+EXIF is the date and the GPS coordinates, and TIFF is simple enough to read
+directly. The parser is defensive — a damaged file returns empty values instead
+of raising, because one corrupt JPEG must not stop a backup.
 """
 from __future__ import annotations
 
 import struct
 from datetime import datetime, timedelta, timezone
 
+TAG_SOFTWARE = 0x0131
 TAG_DATETIME = 0x0132
 TAG_MAKE = 0x010F
 TAG_MODEL = 0x0110
@@ -76,7 +77,7 @@ def _read_value(buf, order, typ, count, raw, base):
 
 
 def parse_ifd(buf, offset, order, base=0):
-    """Citeste un IFD TIFF si intoarce dictionarul {tag: valoare}."""
+    """Read one TIFF IFD and return it as {tag: value}."""
     tags = {}
     if offset < 0 or offset + 2 > len(buf):
         return tags
@@ -101,7 +102,7 @@ def parse_ifd(buf, offset, order, base=0):
 
 
 def parse_tiff(buf):
-    """Sparge un bloc TIFF/EXIF in cele trei IFD-uri care ne intereseaza."""
+    """Split a TIFF/EXIF block into the three IFDs we care about."""
     result = {"ifd0": {}, "exif": {}, "gps": {}}
     if len(buf) < 8:
         return result
@@ -141,7 +142,7 @@ def _parse_exif_datetime(text):
 
 
 def exif_datetime(tags):
-    """Data locala a pozei plus eticheta sursei, in ordinea increderii."""
+    """The photo's local timestamp plus a label saying where it came from."""
     exif = tags.get("exif", {})
     ifd0 = tags.get("ifd0", {})
     for source, value in (
@@ -165,7 +166,7 @@ def _rational(value):
 
 
 def exif_gps(tags):
-    """Coordonatele ca (lat, lon) in grade zecimale, sau None."""
+    """Coordinates as (lat, lon) in decimal degrees, or None."""
     gps = tags.get("gps", {})
     coords = []
     for vals, ref in ((gps.get(GPS_LAT), gps.get(GPS_LAT_REF)),
@@ -184,14 +185,14 @@ def exif_gps(tags):
     lat, lon = coords
     if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
         return None
-    # Unele camere scriu 0/0 cand fix-ul GPS a esuat; nu e Golful Guineei.
+    # Some cameras write 0/0 when the GPS fix failed; that is not the Gulf of Guinea.
     if abs(lat) < 1e-9 and abs(lon) < 1e-9:
         return None
     return lat, lon
 
 
 def exif_gps_datetime(tags):
-    """Data UTC din tag-urile GPS - plasa de siguranta cand lipseste EXIF-ul."""
+    """The UTC timestamp from the GPS tags - a safety net when EXIF has none."""
     gps = tags.get("gps", {})
     stamp = gps.get(GPS_DATESTAMP)
     if not isinstance(stamp, str):
@@ -217,8 +218,14 @@ def exif_camera(tags):
             model if isinstance(model, str) else None)
 
 
+def exif_software(tags):
+    """The Software tag - screenshots often name the tool that produced them."""
+    value = tags.get("ifd0", {}).get(TAG_SOFTWARE)
+    return value if isinstance(value, str) else None
+
+
 def exif_from_jpeg(data):
-    """Extrage blocul TIFF din segmentul APP1 al unui JPEG."""
+    """Pull the TIFF block out of a JPEG's APP1 segment."""
     if data[:2] != b"\xff\xd8":
         return None
     pos, n = 2, len(data)
@@ -246,7 +253,7 @@ def exif_from_jpeg(data):
 
 
 def exif_from_png(data):
-    """PNG-urile moderne (inclusiv screenshot-urile iOS) au un chunk eXIf."""
+    """Modern PNGs, including iOS screenshots, carry an eXIf chunk."""
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         return None
     pos, n = 8, len(data)

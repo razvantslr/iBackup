@@ -1,4 +1,4 @@
-"""Teste pentru utilitare, amprente, geocodare si calculul cailor."""
+"""Tests for the helpers, fingerprints, geocoding and path building."""
 from __future__ import annotations
 
 import unittest
@@ -24,7 +24,7 @@ class UtilTests(unittest.TestCase):
         self.assertEqual(util.sanitize_component('bad:name?*'), "bad_name")
         self.assertEqual(util.sanitize_component("   "), "_")
         self.assertEqual(util.sanitize_component("."), "_")
-        # Numele rezervate de Windows nu pot fi foldere.
+        # Windows reserved names cannot be used as folders.
         self.assertTrue(util.sanitize_component("CON").startswith("_"))
 
     def test_sanitize_filename_keeps_extension(self):
@@ -43,7 +43,7 @@ class UtilTests(unittest.TestCase):
             first.write_bytes(b"x")
             second = util.unique_path(first)
             self.assertEqual(second.name, "IMG_0001_2.jpg")
-            # Caile rezervate in rularea curenta conteaza chiar daca nu exista pe disc.
+            # Paths reserved by the current run count even before they exist.
             taken = {str(second).lower()}
             third = util.unique_path(first, taken)
             self.assertEqual(third.name, "IMG_0001_3.jpg")
@@ -106,7 +106,7 @@ class GeocodeTests(unittest.TestCase):
 
     def test_prefers_the_big_city_within_radius(self):
         geo = geocode.Geocoder(self.cities, radius_km=25.0, prefer="population")
-        # Coordonate din Badalona: vrem "Barcelona", nu un folder separat.
+        # Coordinates in Badalona: we want "Barcelona", not a folder of its own.
         name, source = geo.place_name(41.45, 2.25)
         self.assertEqual(name, "Barcelona")
         self.assertEqual(source, "builtin")
@@ -140,7 +140,7 @@ class GeocodeTests(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_haversine_known_distance(self):
-        # Bucuresti - Brasov, aproximativ 140 km in linie dreapta.
+        # Bucharest to Brasov, roughly 140 km as the crow flies.
         distance = geocode.haversine_km(44.44, 26.10, 45.65, 25.61)
         self.assertTrue(135 < distance < 145, distance)
 
@@ -152,8 +152,8 @@ class GeocodeTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "cities.tsv"
             path.write_text("Cluj-Napoca\tRO\t46.77\t23.60\t324000\n"
-                            "# comentariu\n"
-                            "rand invalid\n", encoding="utf-8")
+                            "# a comment line\n"
+                            "not a valid row\n", encoding="utf-8")
             geo = geocode.Geocoder.from_dataset(path, radius_km=25.0)
             self.assertEqual(len(geo.cities), 1)
             self.assertEqual(geo.place_name(46.77, 23.60)[0], "Cluj-Napoca")

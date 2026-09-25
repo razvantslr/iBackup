@@ -1,4 +1,4 @@
-"""Teste cap-coada pe pipeline: import, duplicate, grupuri, locatii deduse."""
+"""End-to-end pipeline tests: import, duplicates, groups, guessed locations."""
 from __future__ import annotations
 
 import unittest
@@ -37,7 +37,7 @@ class PipelineTestCase(unittest.TestCase):
         self.report.close()
         self._tmp.cleanup()
 
-    # --- ajutoare ---------------------------------------------------------
+    # --- helpers ----------------------------------------------------------
 
     def photo(self, name, taken_at, gps=None, payload=None, subdir=""):
         target = self.src / subdir / name if subdir else self.src / name
@@ -148,7 +148,7 @@ class ImportTests(PipelineTestCase):
         self.assertEqual(stats.duplicates, 1)
 
     def test_non_media_files_are_ignored(self):
-        (self.src / "note.txt").write_text("nimic de vazut", encoding="utf-8")
+        (self.src / "note.txt").write_text("nothing to see here", encoding="utf-8")
         (self.src / "gol.jpg").write_bytes(b"")
         self.photo("IMG_0001.jpg", datetime(2025, 1, 14), BARCELONA)
         stats, _ = self.run_import()
@@ -174,8 +174,8 @@ class LivePhotoTests(PipelineTestCase):
         self.assertEqual(len({r["group_key"] for r in rows}), 1)
 
     def test_companions_follow_a_renamed_primary(self):
-        # Un fisier cu acelasi nume exista deja la destinatie, deci poza devine
-        # IMG_0001_2.jpg - filmul ei trebuie sa se numeasca la fel.
+        # A file with the same name is already at the destination, so the photo
+        # becomes IMG_0001_2.jpg - its movie has to follow that name.
         self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA,
                    payload=b"vechi" * 50, subdir="a")
         self.run_import()
@@ -279,7 +279,7 @@ class VerifyAndReindexTests(PipelineTestCase):
         self.assertEqual(stats["added"], 2)
         self.assertEqual({r["place"] for r in rows}, {"Barcelona", "Bucuresti"})
 
-        # Dupa reindexare, un import al acelorasi poze nu mai copiaza nimic.
+        # After a reindex, importing the same photos copies nothing.
         stats, _ = self.run_import()
         self.assertEqual(stats.imported, 0)
         self.assertEqual(stats.duplicates, 2)

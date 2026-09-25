@@ -1,8 +1,8 @@
-"""Indexul SQLite care tine minte ce e deja in backup.
+"""The SQLite index that remembers what is already in the backup.
 
-Baza de date e sursa de adevar pentru deduplicare si pentru stiut unde a ajuns
-fiecare fisier. Sta in <backup>/.ibackup/index.db, deci calatoreste odata cu
-SSD-ul. Daca se pierde, se poate reconstrui cu comanda `reindex`.
+The database is the source of truth for deduplication and for knowing where
+each file ended up. It lives in <backup>/.ibackup/index.db, so it travels with
+the SSD. If it is ever lost, `reindex` rebuilds it from the files on disk.
 """
 from __future__ import annotations
 
@@ -132,7 +132,7 @@ class Database:
             self.conn.rollback()
             raise
 
-    # --- rulari ------------------------------------------------------------
+    # --- runs --------------------------------------------------------------
 
     def start_run(self, source: str, dest: str, mode: str) -> int:
         cur = self.conn.execute(
@@ -155,7 +155,7 @@ class Database:
             (run_id, source_ref, message[:2000], _now()),
         )
 
-    # --- deduplicare -------------------------------------------------------
+    # --- deduplication -----------------------------------------------------
 
     def find_by_fingerprint(self, size: int, partial_md5: str) -> list[sqlite3.Row]:
         return list(self.conn.execute(
@@ -176,7 +176,7 @@ class Database:
              matched_id, _now()),
         )
 
-    # --- inserare / actualizare --------------------------------------------
+    # --- insert / update ---------------------------------------------------
 
     def insert_media(self, **kw) -> int:
         columns = (
@@ -212,7 +212,7 @@ class Database:
     def delete_media(self, media_id: int) -> None:
         self.conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
 
-    # --- cache geocodare ---------------------------------------------------
+    # --- geocoding cache ---------------------------------------------------
 
     def cached_place(self, lat: float, lon: float):
         row = self.conn.execute(
@@ -228,7 +228,7 @@ class Database:
             (lat, lon, place, source),
         )
 
-    # --- interogari pentru deducerea locatiei ------------------------------
+    # --- queries used when guessing a location -----------------------------
 
     def media_without_place(self, unknown_place: str) -> list[sqlite3.Row]:
         return list(self.conn.execute(
@@ -238,7 +238,7 @@ class Database:
         ))
 
     def nearest_located_in_time(self, taken_at: str, window_hours: float):
-        """Cea mai apropiata in timp poza cu GPS, in fereastra data."""
+        """The closest photo in time that does have GPS, within the window."""
         try:
             pivot = datetime.fromisoformat(taken_at)
         except ValueError:
@@ -272,7 +272,7 @@ class Database:
             "SELECT * FROM media WHERE group_key = ?", (group_key,)
         ))
 
-    # --- rapoarte ----------------------------------------------------------
+    # --- reporting ---------------------------------------------------------
 
     def all_media(self):
         return self.conn.execute("SELECT * FROM media ORDER BY rel_path")

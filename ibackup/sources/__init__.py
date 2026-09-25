@@ -1,4 +1,4 @@
-"""Alegerea sursei din ce a scris utilizatorul in linia de comanda."""
+"""Turning what the user typed on the command line into a Source."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,10 +11,10 @@ __all__ = ["Source", "SourceItem", "Localized", "FolderSource", "build_source",
 
 
 def build_source(spec: str, cfg) -> Source:
-    """spec: un folder, 'iphone', 'iphone:afc', 'iphone:mtp' sau 'folder:<cale>'."""
+    """spec: a folder, 'iphone', 'iphone:afc', 'iphone:mtp' or 'folder:<path>'."""
     spec = (spec or "").strip()
     if not spec:
-        raise ValueError("Nu ai spus de unde copiez. Foloseste --source.")
+        raise ValueError("You did not say where to copy from. Use --source.")
 
     lowered = spec.lower()
     if lowered.startswith("folder:"):
@@ -38,10 +38,11 @@ def _folder(path: str, cfg) -> FolderSource:
 
 
 def _refuse_overlap(source_root: Path, dest_root: Path) -> None:
-    """Sursa si backup-ul nu au voie sa se contina reciproc.
+    """The source and the backup must not contain one another.
 
-    Altfel am copia backup-ul in el insusi: la prima rulare, cu indexul gol,
-    fiecare fisier deja sortat ar fi vazut ca poza noua si rescris in alta parte.
+    Otherwise we would copy the backup into itself: on the first run, with an
+    empty index, every already-sorted file would look new and be written again
+    somewhere else.
     """
     try:
         source_abs = source_root.resolve()
@@ -50,25 +51,25 @@ def _refuse_overlap(source_root: Path, dest_root: Path) -> None:
         return
     if source_abs == dest_abs:
         raise ValueError(
-            f"Sursa si destinatia sunt acelasi folder ({source_abs}). "
-            "Pentru a reconstrui indexul din ce exista deja, foloseste "
-            "comanda 'reindex'."
+            f"The source and the destination are the same folder ({source_abs}). "
+            "To rebuild the index from what is already there, use the 'reindex' "
+            "command."
         )
     if dest_abs in source_abs.parents:
         raise ValueError(
-            f"Sursa {source_abs} e in interiorul backup-ului {dest_abs}. "
-            "Alege o sursa din afara backup-ului."
+            f"The source {source_abs} sits inside the backup {dest_abs}. "
+            "Pick a source outside the backup."
         )
     if source_abs in dest_abs.parents:
         raise ValueError(
-            f"Backup-ul {dest_abs} e in interiorul sursei {source_abs}, deci "
-            "scanarea ar include si fisierele deja copiate. Alege un subfolder "
-            "al sursei, sau muta backup-ul in afara ei."
+            f"The backup {dest_abs} sits inside the source {source_abs}, so the "
+            "scan would include files that are already copied. Pick a subfolder "
+            "of the source, or move the backup out of it."
         )
 
 
 def _iphone(backend: str | None, cfg) -> Source:
-    """AFC e prima optiune; MTP e plasa de siguranta cand lipseste driverul Apple."""
+    """AFC is the first choice; MTP is the fallback when Apple's driver is absent."""
     errors = []
     order = [backend] if backend else ["afc", "mtp"]
     for name in order:
@@ -91,18 +92,18 @@ def _iphone(backend: str | None, cfg) -> Source:
             except Exception as exc:
                 errors.append(f"MTP: {type(exc).__name__}: {exc}")
         else:
-            raise ValueError(f"Backend necunoscut pentru iPhone: {name}")
-    raise RuntimeError("Nu am putut deschide iPhone-ul.\n  " + "\n  ".join(errors))
+            raise ValueError(f"Unknown iPhone backend: {name}")
+    raise RuntimeError("Could not open the iPhone.\n  " + "\n  ".join(errors))
 
 
 def describe_backends() -> list[dict]:
-    """Ce metode de acces la telefon sunt disponibile acum pe masina asta."""
+    """Which ways of reaching the phone are available on this machine right now."""
     out = []
     try:
         from .afc import list_devices as afc_devices
         devices = afc_devices()
         out.append({"backend": "afc", "available": True,
-                    "detail": f"{len(devices)} dispozitiv(e) pe USB", "devices": devices})
+                    "detail": f"{len(devices)} device(s) on USB", "devices": devices})
     except Exception as exc:
         out.append({"backend": "afc", "available": False, "detail": str(exc),
                     "devices": []})
@@ -110,7 +111,7 @@ def describe_backends() -> list[dict]:
         from .mtp import list_devices as mtp_devices
         names = mtp_devices()
         out.append({"backend": "mtp", "available": True,
-                    "detail": f"{len(names)} dispozitiv(e) portabil(e)", "devices": names})
+                    "detail": f"{len(names)} portable device(s)", "devices": names})
     except Exception as exc:
         out.append({"backend": "mtp", "available": False, "detail": str(exc),
                     "devices": []})

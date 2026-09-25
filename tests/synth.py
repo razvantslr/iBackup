@@ -1,7 +1,7 @@
-"""Constructori de fisiere de test: JPEG cu EXIF, HEIC, MOV.
+"""Builders for test files: JPEG with EXIF, HEIC, MOV.
 
-Scriem containerele de mana ca sa testam exact parserele noastre, fara sa avem
-nevoie de poze reale in repo si fara dependinte externe.
+The containers are written by hand so the tests exercise exactly our parsers,
+without keeping real photos in the repo and without external dependencies.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from datetime import datetime
 # --- TIFF / EXIF ------------------------------------------------------------
 
 def _pack_ifd(entries, ifd_offset: int, next_ifd: int = 0) -> bytes:
-    """Serializeaza un IFD (little-endian) impreuna cu zona lui de date."""
+    """Serialise one IFD (little-endian) together with its data area."""
     entries = sorted(entries, key=lambda e: e[0])
     count = len(entries)
     data_start = ifd_offset + 2 + 12 * count + 4
@@ -30,7 +30,7 @@ def _pack_ifd(entries, ifd_offset: int, next_ifd: int = 0) -> bytes:
             raw = b"".join(struct.pack("<II", num, den) for num, den in value)
             items = len(value)
         else:
-            raise ValueError(f"tip nesuportat in generator: {typ}")
+            raise ValueError(f"unsupported type in the builder: {typ}")
         if len(raw) <= 4:
             field = raw.ljust(4, b"\x00")
         else:
@@ -54,7 +54,7 @@ def _dms(value: float):
 
 def build_exif(taken_at: datetime | None = None, gps=None,
                make: str | None = "Apple", model: str | None = "iPhone 13") -> bytes:
-    """Un bloc TIFF/EXIF cu data, GPS si numele camerei."""
+    """A TIFF/EXIF block carrying the date, GPS and the camera name."""
     ifd0 = []
     if make:
         ifd0.append((0x010F, 2, make))
@@ -91,8 +91,8 @@ def build_exif(taken_at: datetime | None = None, gps=None,
             out += _pack_ifd(gps_entries, len(out))
         return out
 
-    # Prima trecere doar ca sa aflam unde cad IFD-urile; dimensiunile nu se
-    # schimba, pentru ca pointerii sunt LONG-uri stocate inline.
+    # A first pass only to learn where the IFDs land; the sizes do not change,
+    # because the pointers are LONGs stored inline.
     draft = assemble(0, 0)
     block0_len = len(_pack_ifd(
         list(ifd0)
@@ -127,7 +127,7 @@ def _box(box_type: bytes, payload: bytes) -> bytes:
 
 
 def build_heic(exif_block: bytes) -> bytes:
-    """HEIC minimal: ftyp + meta(iinf, iloc) + mdat cu blocul EXIF."""
+    """A minimal HEIC: ftyp + meta(iinf, iloc) + mdat holding the EXIF block."""
     ftyp = _box(b"ftyp", b"heic" + struct.pack(">I", 0) + b"heic" + b"mif1")
 
     infe = _box(b"infe", bytes([2, 0, 0, 0]) + struct.pack(">HH", 1, 0)
@@ -147,7 +147,7 @@ def build_heic(exif_block: bytes) -> bytes:
         body += struct.pack(">I", len(exif_block) + 4)
         return _box(b"iloc", body)
 
-    payload = struct.pack(">I", 0) + exif_block   # offset 0 catre antetul TIFF
+    payload = struct.pack(">I", 0) + exif_block   # offset 0 to the TIFF header
 
     meta_stub = _box(b"meta", bytes([0, 0, 0, 0]) + iinf + make_iloc(0))
     data_offset = len(ftyp) + len(meta_stub) + 8
@@ -164,7 +164,7 @@ def _qt_text_box(box_type: bytes, text: str) -> bytes:
 def build_mov(created: str | None = "2019-07-12T18:30:42+0300",
               iso6709: str | None = "+44.4268+026.1025+075.000/",
               mvhd_seconds: int | None = None) -> bytes:
-    """MOV minimal cu atomii (c)day si (c)xyz din udta."""
+    """A minimal MOV with the (c)day and (c)xyz atoms inside udta."""
     ftyp = _box(b"ftyp", b"qt  " + struct.pack(">I", 0) + b"qt  ")
 
     mvhd_payload = bytes([0, 0, 0, 0])
@@ -187,7 +187,7 @@ def build_mov(created: str | None = "2019-07-12T18:30:42+0300",
 
 def write_photo(path, taken_at=None, gps=None, payload=b"\x00" * 64,
                 make="Apple", model="iPhone 13"):
-    """Scrie un JPEG de test si intoarce calea."""
+    """Write a test JPEG and return its path."""
     exif_block = build_exif(taken_at, gps, make, model) if (taken_at or gps) else None
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(build_jpeg(exif_block, payload))

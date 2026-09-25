@@ -1,4 +1,4 @@
-"""Sursa "folder": un backup vechi, un card SD, orice director de pe disc."""
+"""The "folder" source: an old backup, an SD card, any directory on disk."""
 from __future__ import annotations
 
 import os
@@ -18,7 +18,7 @@ class FolderSource(Source):
                  include_sidecars=True, follow_symlinks=False):
         self.root = Path(root).resolve()
         if not self.root.is_dir():
-            raise NotADirectoryError(f"Sursa nu e un folder: {self.root}")
+            raise NotADirectoryError(f"The source is not a folder: {self.root}")
         self.label = str(self.root)
         self.skip_dirs = {d.lower() for d in (skip_dirs or [])}
         self.include_videos = include_videos
@@ -64,5 +64,5 @@ class FolderSource(Source):
 
     @contextmanager
     def localize(self, item: SourceItem, staging_dir: Path):
-        # Fisierul e deja pe disc: nu-l copiem degeaba in staging.
+        # The file is already on disk; no point copying it into staging.
         yield Localized(path=Path(item.ref), is_temp=False)

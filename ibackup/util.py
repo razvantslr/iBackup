@@ -1,11 +1,13 @@
-"""Utilitare generice: nume de luni, curatare nume de fisiere, cai unice."""
+"""Small helpers: month names, filesystem-safe names, unique paths, free space."""
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import unicodedata
 from pathlib import Path
 
+# Folder names on disk stay in the user's language; only the code is English.
 MONTHS = {
     "ro": {
         1: "ianuarie", 2: "februarie", 3: "martie", 4: "aprilie",
@@ -19,7 +21,7 @@ MONTHS = {
     },
 }
 
-# Caractere care nu se descompun singure prin NFKD.
+# Characters that NFKD does not decompose on its own.
 _EXTRA_FOLD = {
     "ß": "ss", "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe",
     "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D",
@@ -32,14 +34,17 @@ _WIN_RESERVED = {
     *(f"LPT{i}" for i in range(1, 10)),
 }
 
-_ILLEGAL = re.compile(r'[<>:"/\|?*\x00-\x1f]')
+_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+GB = 1024 ** 3
 
 
 def fold_ascii(text: str) -> str:
-    """'Bucuresti' din 'Bucureşti', 'Malaga' din 'Málaga'.
+    """'Bucuresti' from 'Bucureşti', 'Malaga' from 'Málaga'.
 
-    Numele de foldere raman ASCII ca sa nu avem surprize cu encoding-uri
-    diferite intre Windows, SSD-uri formatate exFAT si eventuale copii pe Linux.
+    Folder names are kept ASCII so the same backup reads identically on
+    Windows, on an exFAT-formatted SSD and on a Linux box, none of which agree
+    on Unicode normalisation.
     """
     out = []
     for ch in text:
@@ -53,7 +58,7 @@ def fold_ascii(text: str) -> str:
 
 
 def sanitize_component(name: str, fallback: str = "_") -> str:
-    """Transforma un text arbitrar intr-un nume de folder valid pe Windows."""
+    """Turn arbitrary text into a valid Windows folder name."""
     name = fold_ascii(name).strip()
     name = _ILLEGAL.sub("_", name)
     name = re.sub(r"\s+", "_", name)
@@ -67,8 +72,8 @@ def sanitize_component(name: str, fallback: str = "_") -> str:
     return name[:120]
 
 
-def sanitize_filename(name: str, fallback: str = "fisier") -> str:
-    """Ca sanitize_component, dar pastreaza extensia si spatiile devin '_'."""
+def sanitize_filename(name: str, fallback: str = "file") -> str:
+    """Like sanitize_component, but keeps the extension."""
     stem, ext = os.path.splitext(name)
     ext = _ILLEGAL.sub("_", fold_ascii(ext)).strip()
     stem = sanitize_component(stem, fallback=fallback)
@@ -83,10 +88,10 @@ def month_folder(month: int, language: str = "ro") -> str:
 
 
 def unique_path(path: Path, taken: set[str] | None = None) -> Path:
-    """Intoarce o cale libera, adaugand _2, _3 ... daca e nevoie.
+    """Return a free path, appending _2, _3 ... when needed.
 
-    `taken` permite rezervarea cailor alese in aceeasi rulare, inainte ca
-    fisierele sa existe efectiv pe disc (util in dry-run si la copieri paralele).
+    `taken` lets the caller reserve paths chosen earlier in the same run,
+    before the files actually exist on disk (needed for dry-run).
     """
     taken = taken if taken is not None else set()
 
@@ -100,7 +105,23 @@ def unique_path(path: Path, taken: set[str] | None = None) -> Path:
         candidate = path.with_name(f"{stem}_{i}{ext}")
         if not busy(candidate):
             return candidate
-    raise RuntimeError(f"Nu am gasit un nume liber pentru {path}")
+    raise RuntimeError(f"No free name found for {path}")
+
+
+def free_space(path: Path) -> int:
+    """Bytes available on the volume holding `path`.
+
+    Walks up to the nearest existing ancestor, so this works before the backup
+    folder has been created.
+    """
+    path = Path(path)
+    for candidate in [path, *path.parents]:
+        if candidate.exists():
+            try:
+                return shutil.disk_usage(candidate).free
+            except OSError:
+                break
+    return 0
 
 
 def human_size(num: float) -> str:

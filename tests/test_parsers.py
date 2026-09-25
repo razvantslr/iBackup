@@ -1,4 +1,4 @@
-"""Teste pentru citirea metadatelor din JPEG, HEIC si MOV."""
+"""Tests for reading metadata out of JPEG, HEIC and MOV files."""
 from __future__ import annotations
 
 import io
@@ -84,13 +84,13 @@ class QuickTimeTests(unittest.TestCase):
         self.assertEqual(isobmff.container_kind(fh, len(data)), "quicktime")
         info = isobmff.quicktime_metadata(fh, len(data))
         self.assertEqual(info["taken_at_source"], "qt:day")
-        # Offset-ul +03:00 e ora locala de la fata locului, o pastram ca atare.
+        # The +03:00 offset is local time on location; we keep it as written.
         self.assertEqual(info["taken_at"].hour, 18)
         self.assertAlmostEqual(info["gps"][0], 44.4268, places=4)
         self.assertAlmostEqual(info["gps"][1], 26.1025, places=4)
 
     def test_falls_back_to_mvhd(self):
-        # 3 600 000 000 s dupa 1904-01-01 = 2018-02-11T15:20:00Z
+        # 3,600,000,000 s after 1904-01-01 is 2018-02-11T15:20:00Z
         data = synth.build_mov(created=None, iso6709=None, mvhd_seconds=3600000000)
         fh = io.BytesIO(data)
         info = isobmff.quicktime_metadata(fh, len(data))

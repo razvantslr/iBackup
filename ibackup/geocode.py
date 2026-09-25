@@ -1,12 +1,13 @@
-"""Reverse geocoding offline: din coordonate GPS in nume de oras.
+"""Offline reverse geocoding: from GPS coordinates to a city name.
 
-Merge fara internet. Implicit foloseste lista scurta de orase din acest fisier;
-daca instalezi setul GeoNames (`python -m ibackup geonames --install`),
-acoperirea creste la ~50.000 de localitati.
+Works without internet. By default it uses the short city list in this file; if
+you install the GeoNames dataset (`python -m ibackup geonames --install`),
+coverage grows to roughly 50,000 places.
 
-Regula de numire: dintre orasele aflate in raza configurata (implicit 25 km) il
-alegem pe cel mai mare. Asa, o poza facuta in Badalona ajunge in "Barcelona", nu
-intr-un folder separat, ceea ce e exact gruparea "pe cateva km" pe care o vrem.
+The naming rule: among the cities within the configured radius (25 km by
+default) we pick the largest one. That way a photo taken in Badalona lands in
+"Barcelona" rather than a folder of its own, which is exactly the "within a few
+kilometres" grouping we want.
 """
 from __future__ import annotations
 
@@ -16,8 +17,8 @@ from pathlib import Path
 
 EARTH_RADIUS_KM = 6371.0088
 
-# Lista de rezerva: centre aproximative de oras, folosite cand setul GeoNames
-# nu e instalat. Suficienta pentru orase mari, nu si pentru sate.
+# Fallback list: approximate city centres, used when the GeoNames dataset is
+# not installed. Good enough for cities, not for villages.
 BUILTIN_CITIES: list[tuple[str, str, float, float, int]] = [
     # Romania
     ("Bucuresti", "RO", 44.44, 26.10, 1830000), ("Cluj-Napoca", "RO", 46.77, 23.60, 324000),
@@ -50,7 +51,7 @@ BUILTIN_CITIES: list[tuple[str, str, float, float, int]] = [
     ("Sighisoara", "RO", 46.22, 24.79, 28000), ("Curtea de Arges", "RO", 45.14, 24.68, 27000),
     ("Vatra Dornei", "RO", 47.35, 25.36, 14000), ("Sinaia", "RO", 45.35, 25.55, 10000),
     ("Busteni", "RO", 45.41, 25.53, 9000), ("Predeal", "RO", 45.50, 25.58, 4700),
-    # Europa
+    # Europe
     ("London", "GB", 51.51, -0.13, 8900000), ("Paris", "FR", 48.86, 2.35, 2100000),
     ("Madrid", "ES", 40.42, -3.70, 3300000), ("Barcelona", "ES", 41.39, 2.17, 1620000),
     ("Valencia", "ES", 39.47, -0.38, 790000), ("Sevilla", "ES", 37.39, -5.98, 690000),
@@ -96,7 +97,7 @@ BUILTIN_CITIES: list[tuple[str, str, float, float, int]] = [
     ("Kyiv", "UA", 50.45, 30.52, 2960000), ("Moskva", "RU", 55.76, 37.62, 12500000),
     ("Sankt-Peterburg", "RU", 59.94, 30.31, 5400000), ("Riga", "LV", 56.95, 24.11, 615000),
     ("Vilnius", "LT", 54.69, 25.28, 580000), ("Tallinn", "EE", 59.44, 24.75, 440000),
-    # America
+    # Americas
     ("New York", "US", 40.71, -74.01, 8300000), ("Los Angeles", "US", 34.05, -118.24, 3900000),
     ("San Francisco", "US", 37.77, -122.42, 875000), ("Chicago", "US", 41.88, -87.63, 2700000),
     ("Seattle", "US", 47.61, -122.33, 740000), ("Boston", "US", 42.36, -71.06, 690000),
@@ -109,7 +110,7 @@ BUILTIN_CITIES: list[tuple[str, str, float, float, int]] = [
     ("Rio de Janeiro", "BR", -22.91, -43.17, 6700000), ("Sao Paulo", "BR", -23.55, -46.63, 12300000),
     ("Buenos Aires", "AR", -34.60, -58.38, 3100000), ("Lima", "PE", -12.05, -77.04, 9700000),
     ("Santiago", "CL", -33.45, -70.67, 5600000), ("Bogota", "CO", 4.71, -74.07, 7400000),
-    # Africa & Orientul Mijlociu
+    # Africa & Middle East
     ("Dubai", "AE", 25.20, 55.27, 3400000), ("Abu Dhabi", "AE", 24.45, 54.38, 1500000),
     ("Doha", "QA", 25.29, 51.53, 1200000), ("Tel Aviv", "IL", 32.08, 34.78, 460000),
     ("Yerushalayim", "IL", 31.77, 35.21, 940000), ("Cairo", "EG", 30.04, 31.24, 9500000),
@@ -150,14 +151,14 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def grid_label(lat: float, lon: float) -> str:
-    """Eticheta de rezerva cand nu gasim niciun oras: GPS_44.4N_26.1E."""
+    """Fallback label when no city is close enough: GPS_44.4N_26.1E."""
     ns = "N" if lat >= 0 else "S"
     ew = "E" if lon >= 0 else "W"
     return f"GPS_{abs(lat):.1f}{ns}_{abs(lon):.1f}{ew}"
 
 
 def load_geonames(path) -> list[tuple[str, str, float, float, int]]:
-    """Citeste fie un dump GeoNames (cities5000.txt), fie TSV-ul nostru compact."""
+    """Reads either a GeoNames dump (cities5000.txt) or our compact TSV."""
     cities: list[tuple[str, str, float, float, int]] = []
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -166,7 +167,7 @@ def load_geonames(path) -> list[tuple[str, str, float, float, int]]:
                 continue
             cols = line.split("\t")
             try:
-                if len(cols) >= 15:  # dump GeoNames
+                if len(cols) >= 15:  # GeoNames dump
                     name = cols[2].strip() or cols[1].strip()
                     lat, lon = float(cols[4]), float(cols[5])
                     country = cols[8].strip()
@@ -186,7 +187,7 @@ def load_geonames(path) -> list[tuple[str, str, float, float, int]]:
 
 
 class Geocoder:
-    """Cauta cel mai potrivit oras pentru o pereche de coordonate."""
+    """Finds the best-fitting city for a pair of coordinates."""
 
     def __init__(self, cities=None, *, radius_km: float = 25.0,
                  prefer: str = "population", cluster_decimals: int = 2,
@@ -206,12 +207,12 @@ class Geocoder:
     def from_dataset(cls, path, **kwargs) -> "Geocoder":
         cities = load_geonames(path)
         if not cities:
-            raise ValueError(f"Setul de date {path} nu contine orase")
+            raise ValueError(f"Dataset {path} contains no cities")
         kwargs.setdefault("source", "geonames")
         return cls(cities, **kwargs)
 
     def cluster_key(self, lat: float, lon: float) -> tuple[float, float]:
-        """Rotunjim coordonatele ca poze din acelasi loc sa cada pe acelasi oras."""
+        """Round coordinates so photos from one spot resolve to one city."""
         d = self.cluster_decimals
         return (round(lat, d), round(lon, d))
 
@@ -225,7 +226,7 @@ class Geocoder:
         for ilat in lat_cells:
             for step in range(lon_span + 1):
                 ilon = lon_start + step
-                # Normalizam longitudinea ca sa functioneze si peste meridianul 180.
+                # Wrap longitude so the search also works across the 180th meridian.
                 if ilon > 180:
                     ilon -= 360
                 elif ilon < -180:
@@ -257,7 +258,7 @@ class Geocoder:
         return best
 
     def place_name(self, lat: float | None, lon: float | None) -> tuple[str, str]:
-        """Intoarce (nume_pentru_folder, sursa). Nu intoarce niciodata gol."""
+        """Returns (folder_name, source). Never returns an empty name."""
         if lat is None or lon is None:
             return "", ""
         place = self.lookup(lat, lon)

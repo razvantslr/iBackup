@@ -1,4 +1,4 @@
-"""Traducerea metadatelor in calea de pe SSD: an / luna / locatie / fisier."""
+"""Turning metadata into a path on the SSD: year / month / place / file."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -18,7 +18,7 @@ def place_folder(place: str | None, cfg: Config) -> str:
 
 def target_filename(name: str, taken_at: datetime | None, cfg: Config,
                     stem_override: str | None = None) -> str:
-    """Numele final. Implicit pastram numele original din telefon."""
+    """The final filename. By default we keep the name the camera gave it."""
     clean = sanitize_filename(name)
     if stem_override:
         ext = clean[clean.rfind("."):] if "." in clean else ""
@@ -33,7 +33,7 @@ def target_filename(name: str, taken_at: datetime | None, cfg: Config,
 
 def dest_dir(taken_at: datetime | None, place: str | None, kind: str,
              cfg: Config) -> PurePosixPath:
-    """Folderul (relativ la radacina backup-ului) in care ajunge fisierul."""
+    """The folder, relative to the backup root, where a file belongs."""
     if taken_at is None:
         parts = [NO_DATE_FOLDER, place_folder(place, cfg)]
     else:

@@ -1,13 +1,13 @@
-"""Sursa "iPhone prin MTP" - exact ce vezi in Explorer la Apple iPhone.
+"""The "iPhone over MTP" source - what Explorer shows under Apple iPhone.
 
-Merge cu driverul care vine cu Windows, fara iTunes, dar are limitele shell-ului:
-copiem fisier cu fisier prin CopyHere si nu putem citi partial, deci fiecare
-fisier trebuie adus pe disc inainte sa stim daca e duplicat. Pentru biblioteci
-mari, AFC (sources/afc.py) e varianta buna.
+It works with the driver Windows ships, without iTunes, but it inherits the
+shell's limits: files are copied one by one through CopyHere and cannot be read
+partially, so every file must be fetched before we can tell whether it is a
+duplicate. For large libraries, AFC (sources/afc.py) is the better choice.
 
-ATENTIE: pe telefon trebuie setat Settings > Photos > Transfer to Mac or PC >
-Keep Originals. Pe "Automatic", iPhone-ul converteste HEIC in JPEG in timpul
-copierii si primesti alt fisier decat originalul.
+NOTE: on the phone, set Settings > Photos > Transfer to Mac or PC > Keep
+Originals. On "Automatic" the iPhone converts HEIC to JPEG while copying and you
+receive a different file from the original.
 """
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ from typing import Iterator
 from ..mediameta import is_media_name, kind_for_name
 from .base import Source, SourceItem
 
-SSF_DRIVES = 17  # "This PC" in spatiul de nume al shell-ului
+SSF_DRIVES = 17  # "This PC" in the shell namespace
 
-# Flag-urile pentru CopyHere: fara dialoguri, fara confirmari, da la toate.
+# CopyHere flags: no dialogs, no confirmations, yes to everything.
 COPY_FLAGS = 4 | 16 | 512 | 1024
 
 MEDIA_DIR_HINTS = ("dcim", "internal storage", "apple")
@@ -36,13 +36,13 @@ def _import_win32():
         import win32com.client  # type: ignore
     except ImportError as exc:  # pragma: no cover - depinde de mediu
         raise MtpUnavailable(
-            "pywin32 nu e instalat. Ruleaza: pip install pywin32"
+            "pywin32 is not installed. Run: pip install pywin32"
         ) from exc
     return pythoncom, win32com.client
 
 
 def list_devices() -> list[str]:
-    """Numele dispozitivelor portabile vazute de Windows."""
+    """The names of the portable devices Windows can see."""
     pythoncom, client = _import_win32()
     pythoncom.CoInitialize()
     shell = client.Dispatch("Shell.Application")
@@ -79,7 +79,7 @@ class MtpSource(Source):
     def _find_device(self, device_name: str | None):
         computer = self.shell.NameSpace(SSF_DRIVES)
         if computer is None:
-            raise MtpUnavailable("Nu pot deschide 'This PC' prin shell.")
+            raise MtpUnavailable("Cannot open 'This PC' through the shell.")
         candidates = []
         for item in computer.Items():
             try:
@@ -87,7 +87,7 @@ class MtpSource(Source):
                     continue
                 path = str(item.Path)
                 if len(path) > 1 and path[1:3] == ":\\":
-                    continue  # partitie obisnuita, nu dispozitiv portabil
+                    continue  # an ordinary drive, not a portable device
                 candidates.append(item)
             except Exception:
                 continue
@@ -95,18 +95,18 @@ class MtpSource(Source):
             for item in candidates:
                 if device_name.lower() in str(item.Name).lower():
                     return item
-            raise MtpUnavailable(f"Nu am gasit dispozitivul '{device_name}'.")
+            raise MtpUnavailable(f"Device '{device_name}' not found.")
         for item in candidates:
             if "iphone" in str(item.Name).lower() or "ipad" in str(item.Name).lower():
                 return item
         if candidates:
             return candidates[0]
         raise MtpUnavailable(
-            "Nu vad niciun iPhone. Verifica: cablu de date, telefon deblocat, "
-            "'Trust This Computer' apasat, si ca apare in Explorer."
+            "No iPhone visible. Check: a data cable, the phone unlocked, "
+            "'Trust This Computer' accepted, and that it shows up in Explorer."
         )
 
-    # --- enumerare ---------------------------------------------------------
+    # --- enumeration -------------------------------------------------------
 
     def _folder_of(self, item):
         try:
@@ -177,27 +177,27 @@ class MtpSource(Source):
         root = self._folder_of(self.device)
         yield from self._walk(root, "", 0)
 
-    # --- aducerea fisierului -----------------------------------------------
+    # --- fetching a file ---------------------------------------------------
 
     def _resolve(self, item: SourceItem):
         folder = self._folders.get(item.rel_dir)
         if folder is None:
             raise MtpUnavailable(
-                f"Folderul '{item.rel_dir}' nu mai e in cache; reconecteaza telefonul."
+                f"Folder '{item.rel_dir}' is no longer cached; reconnect the phone."
             )
         entry = folder.ParseName(item.name)
         if entry is None:
-            raise FileNotFoundError(f"{item.ref} nu mai exista pe telefon")
+            raise FileNotFoundError(f"{item.ref} no longer exists on the phone")
         return entry
 
     def _fetch(self, item: SourceItem, target: Path) -> None:
-        """CopyHere pastreaza numele original, deci copiem intr-un folder propriu."""
+        """CopyHere keeps the original name, so we copy into a folder of our own."""
         entry = self._resolve(item)
         scratch = target.parent / f"{target.stem}_mtp"
         scratch.mkdir(parents=True, exist_ok=True)
         dest_folder = self.shell.NameSpace(str(scratch))
         if dest_folder is None:
-            raise MtpUnavailable(f"Nu pot deschide folderul de staging {scratch}")
+            raise MtpUnavailable(f"Cannot open the staging folder {scratch}")
         dest_folder.CopyHere(entry, COPY_FLAGS)
 
         produced = self._wait_for_copy(scratch, item)
@@ -208,7 +208,7 @@ class MtpSource(Source):
             pass
 
     def _wait_for_copy(self, scratch: Path, item: SourceItem) -> Path:
-        """CopyHere e asincron: asteptam sa apara fisierul si sa nu mai creasca."""
+        """CopyHere is asynchronous: wait for the file to appear and stop growing."""
         deadline = time.monotonic() + self.copy_timeout
         last_size, stable_since = -1, None
         while time.monotonic() < deadline:
@@ -228,7 +228,7 @@ class MtpSource(Source):
                     stable_since = None
                 last_size = size
             time.sleep(0.15)
-        raise TimeoutError(f"Copierea lui {item.name} de pe telefon a expirat")
+        raise TimeoutError(f"Copying {item.name} from the phone timed out")
 
     def close(self) -> None:
         self._folders.clear()
