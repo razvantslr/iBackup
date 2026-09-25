@@ -80,6 +80,7 @@ class Reporter:
         "scanned": "files seen in the source",
         "imported": "copied into the backup",
         "duplicates": "duplicates skipped",
+        "filtered": "skipped by the media type filter",
         "companions": "of which paired files (Live Photo / .AAE)",
         "no_exif_date": "no date in metadata (used filename/mtime)",
         "no_gps": "without GPS coordinates",

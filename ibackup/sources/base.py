@@ -89,6 +89,25 @@ class Source:
         self.close()
 
 
+def accepts_kind(name: str, accept_kinds: set[str] | None) -> bool:
+    """Whether a file should be enumerated at all, judging only by its name.
+
+    Screenshots cannot be recognised from the name alone, so a source keeps all
+    photos whenever either photos or screenshots are wanted; the pipeline makes
+    the final call once it has read the metadata.
+    """
+    from ..mediameta import is_media_name, kind_for_name
+
+    if not is_media_name(name):
+        return False
+    if accept_kinds is None:
+        return True
+    kind = kind_for_name(name)
+    if kind == "photo":
+        return "photo" in accept_kinds or "screenshot" in accept_kinds
+    return kind in accept_kinds
+
+
 def copy_file(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)

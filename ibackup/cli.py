@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import pipeline
-from .config import Config, load_config, write_default_config
+from .config import MEDIA_KINDS, Config, load_config, write_default_config
 from .db import Database
 from .geocode import Geocoder, load_geonames
 from .reporter import Reporter
@@ -32,7 +32,33 @@ def _config_from_args(args) -> Config:
         cfg.language = args.language
     if getattr(args, "radius_km", None):
         cfg.geo_radius_km = float(args.radius_km)
+    _apply_kind_filter(cfg, args)
     return cfg
+
+
+def _apply_kind_filter(cfg: Config, args) -> None:
+    """--only replaces the set of media kinds; --include and --exclude adjust it."""
+    given = [(name, getattr(args, name, None))
+             for name in ("only", "include", "exclude")
+             if getattr(args, name, None)]
+    if len(given) > 1:
+        names = ", ".join(f"--{name}" for name, _ in given)
+        raise ValueError(f"Use only one of --only, --include and --exclude "
+                         f"(you passed {names}).")
+    if not given:
+        return
+    name, values = given[0]
+    values = set(values)
+    if name == "only":
+        kinds = values
+    elif name == "include":
+        kinds = cfg.allowed_kinds() | values
+    else:
+        kinds = cfg.allowed_kinds() - values
+    if not kinds:
+        raise ValueError("That filter excludes every media type, so there would "
+                         "be nothing to copy.")
+    cfg.kinds = sorted(kinds)
 
 
 def _dataset_path(cfg: Config) -> Path | None:
@@ -69,6 +95,15 @@ def _reporter(cfg: Config, args, name: str) -> Reporter:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         log_path = cfg.log_dir / f"{name}-{stamp}.log"
     return Reporter(log_path=log_path, quiet=args.quiet, verbose=args.verbose)
+
+
+def _add_kind_filters(parser) -> None:
+    parser.add_argument("--only", nargs="+", choices=MEDIA_KINDS, metavar="KIND",
+                        help=f"process only these media kinds ({', '.join(MEDIA_KINDS)})")
+    parser.add_argument("--include", nargs="+", choices=MEDIA_KINDS, metavar="KIND",
+                        help="add these kinds to the ones the config already takes")
+    parser.add_argument("--exclude", nargs="+", choices=MEDIA_KINDS, metavar="KIND",
+                        help="drop these kinds from the ones the config takes")
 
 
 # --- commands ---------------------------------------------------------------
@@ -262,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="confirm duplicates with a full MD5 for the iPhone too")
     p.add_argument("--language", choices=["ro", "en"], help="month folder language")
     p.add_argument("--radius-km", type=float, help="how far away a city may be")
+    _add_kind_filters(p)
     p.set_defaults(func=cmd_import)
 
     p = sub.add_parser("scan", help="same as 'import --dry-run'")
@@ -269,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int)
     p.add_argument("--language", choices=["ro", "en"])
     p.add_argument("--radius-km", type=float)
+    _add_kind_filters(p)
     p.set_defaults(func=cmd_import, dry_run=True, no_infer=True, strict_dedup=False)
 
     p = sub.add_parser("devices", help="which iPhones are visible over USB")
@@ -301,7 +338,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     for name, default in (("dry_run", False), ("limit", None), ("no_infer", False),
                           ("strict_dedup", False), ("deep", False),
-                          ("language", None), ("radius_km", None)):
+                          ("language", None), ("radius_km", None),
+                          ("only", None), ("include", None), ("exclude", None)):
         if not hasattr(args, name):
             setattr(args, name, default)
     try:

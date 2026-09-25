@@ -15,8 +15,7 @@ import posixpath
 from pathlib import Path
 from typing import Iterator
 
-from ..mediameta import is_media_name, kind_for_name
-from .base import Source, SourceItem
+from .base import Source, SourceItem, accepts_kind
 
 DEFAULT_ROOTS = ("/DCIM",)
 MAX_DEPTH = 6
@@ -60,7 +59,7 @@ class AfcSource(Source):
     supports_random_read = True
 
     def __init__(self, *, serial: str | None = None, roots=DEFAULT_ROOTS,
-                 include_videos=True, include_sidecars=True):
+                 accept_kinds=None):
         create_using_usbmux, AfcService = _import_pymobiledevice3()
         try:
             self.lockdown = create_using_usbmux(serial=serial)
@@ -83,8 +82,7 @@ class AfcSource(Source):
             pass
         self.label = f"iPhone AFC ({name or 'unknown'})"
         self.roots = list(roots)
-        self.include_videos = include_videos
-        self.include_sidecars = include_sidecars
+        self.accept_kinds = set(accept_kinds) if accept_kinds is not None else None
         self._supports_seek = all(
             hasattr(self.afc, attr) for attr in ("fopen", "fread", "fclose")
         )
@@ -103,14 +101,7 @@ class AfcSource(Source):
         return str(info.get("st_ifmt", "")).upper().endswith("IFDIR")
 
     def _accepts(self, name: str) -> bool:
-        if not is_media_name(name):
-            return False
-        kind = kind_for_name(name)
-        if kind == "video" and not self.include_videos:
-            return False
-        if kind == "sidecar" and not self.include_sidecars:
-            return False
-        return True
+        return accepts_kind(name, self.accept_kinds)
 
     def _walk(self, path: str, depth: int) -> Iterator[SourceItem]:
         if depth > MAX_DEPTH:

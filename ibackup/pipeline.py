@@ -62,6 +62,7 @@ class Stats:
     no_gps: int = 0
     bytes_copied: int = 0
     inferred_places: int = 0
+    filtered: int = 0
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -109,6 +110,7 @@ class Importer:
         self._free_bytes: int | None = None
         self._checked_after: int = 0
         self.unknown_place = organize.place_folder(None, cfg)
+        self.allowed_kinds = cfg.allowed_kinds()
 
     # --- API ---------------------------------------------------------------
 
@@ -280,7 +282,7 @@ class Importer:
     # --- writing to the destination ----------------------------------------
 
     def _ingest(self, item: SourceItem, local: Localized, fp: Fingerprint,
-                group_key: str | None, anchor: Anchor | None) -> Anchor:
+                group_key: str | None, anchor: Anchor | None) -> Anchor | None:
         kind = kind_for_name(item.name)
         if kind == "sidecar":
             meta = MediaMeta(kind="sidecar")
@@ -290,6 +292,14 @@ class Importer:
             if meta.kind == "screenshot":
                 self.report.detail(
                     f"screenshot ({meta.screenshot_reason}): {item.name}")
+
+        # Screenshots can only be told apart once the metadata has been read, so
+        # this filter runs here rather than during enumeration. On a phone that
+        # means the file was fetched and is now discarded.
+        if meta.kind not in self.allowed_kinds:
+            self.stats.filtered += 1
+            self.report.detail(f"filtered out ({meta.kind}): {item.name}")
+            return None
 
         if meta.taken_at is None and item.mtime:
             meta.taken_at = datetime.fromtimestamp(item.mtime)

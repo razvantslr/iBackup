@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 INTERNAL_DIR = ".ibackup"
+MEDIA_KINDS = ("photo", "screenshot", "video", "sidecar")
 DB_NAME = "index.db"
 CONFIG_NAME = "config.toml"
 
@@ -44,9 +45,11 @@ class Config:
     infer_enabled: bool = True
     infer_window_hours: float = 3.0
 
-    # What we take
+    # What we take. `kinds` overrides the two booleans when the command line
+    # sets an explicit filter; None means "derive it from them".
     include_videos: bool = True
     include_sidecars: bool = True
+    kinds: list[str] | None = None
     skip_dirs: list[str] = field(default_factory=lambda: [
         INTERNAL_DIR, "$RECYCLE.BIN", "System Volume Information", ".git",
         "@eaDir", ".Trash", ".Trashes",
@@ -56,6 +59,17 @@ class Config:
     verify_after_copy: bool = True
     # Refuse to keep copying once the backup drive drops below this.
     min_free_gb: float = 1.0
+
+    def allowed_kinds(self) -> set[str]:
+        """The media kinds this run should keep."""
+        if self.kinds is not None:
+            return set(self.kinds)
+        kinds = {"photo", "screenshot"}
+        if self.include_videos:
+            kinds.add("video")
+        if self.include_sidecars:
+            kinds.add("sidecar")
+        return kinds
 
     @property
     def internal_dir(self) -> Path:

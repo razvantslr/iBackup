@@ -6,35 +6,25 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from ..mediameta import is_media_name
-from .base import Localized, Source, SourceItem
+from .base import Localized, Source, SourceItem, accepts_kind
 
 
 class FolderSource(Source):
     kind = "folder"
     supports_random_read = True
 
-    def __init__(self, root, *, skip_dirs=None, include_videos=True,
-                 include_sidecars=True, follow_symlinks=False):
+    def __init__(self, root, *, skip_dirs=None, accept_kinds=None,
+                 follow_symlinks=False):
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             raise NotADirectoryError(f"The source is not a folder: {self.root}")
         self.label = str(self.root)
         self.skip_dirs = {d.lower() for d in (skip_dirs or [])}
-        self.include_videos = include_videos
-        self.include_sidecars = include_sidecars
+        self.accept_kinds = set(accept_kinds) if accept_kinds is not None else None
         self.follow_symlinks = follow_symlinks
 
     def _accepts(self, name: str) -> bool:
-        from ..mediameta import kind_for_name
-        if not is_media_name(name):
-            return False
-        kind = kind_for_name(name)
-        if kind == "video" and not self.include_videos:
-            return False
-        if kind == "sidecar" and not self.include_sidecars:
-            return False
-        return True
+        return accepts_kind(name, self.accept_kinds)
 
     def iter_items(self) -> Iterator[SourceItem]:
         for dirpath, dirnames, filenames in os.walk(self.root, followlinks=self.follow_symlinks):

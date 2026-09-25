@@ -32,8 +32,7 @@ def _folder(path: str, cfg) -> FolderSource:
     return FolderSource(
         root,
         skip_dirs=cfg.skip_dirs,
-        include_videos=cfg.include_videos,
-        include_sidecars=cfg.include_sidecars,
+        accept_kinds=cfg.allowed_kinds(),
     )
 
 
@@ -76,8 +75,7 @@ def _iphone(backend: str | None, cfg) -> Source:
         if name == "afc":
             from .afc import AfcSource, AfcUnavailable
             try:
-                return AfcSource(include_videos=cfg.include_videos,
-                                 include_sidecars=cfg.include_sidecars)
+                return AfcSource(accept_kinds=cfg.allowed_kinds())
             except AfcUnavailable as exc:
                 errors.append(f"AFC: {exc}")
             except Exception as exc:
@@ -85,8 +83,7 @@ def _iphone(backend: str | None, cfg) -> Source:
         elif name == "mtp":
             from .mtp import MtpSource, MtpUnavailable
             try:
-                return MtpSource(include_videos=cfg.include_videos,
-                                 include_sidecars=cfg.include_sidecars)
+                return MtpSource(accept_kinds=cfg.allowed_kinds())
             except MtpUnavailable as exc:
                 errors.append(f"MTP: {exc}")
             except Exception as exc:

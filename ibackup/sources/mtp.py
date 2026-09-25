@@ -15,8 +15,7 @@ import time
 from pathlib import Path
 from typing import Iterator
 
-from ..mediameta import is_media_name, kind_for_name
-from .base import Source, SourceItem
+from .base import Source, SourceItem, accepts_kind
 
 SSF_DRIVES = 17  # "This PC" in the shell namespace
 
@@ -63,16 +62,15 @@ class MtpSource(Source):
     kind = "mtp"
     supports_random_read = False
 
-    def __init__(self, *, device_name: str | None = None, include_videos=True,
-                 include_sidecars=True, copy_timeout=180.0):
+    def __init__(self, *, device_name: str | None = None, accept_kinds=None,
+                 copy_timeout=180.0):
         pythoncom, client = _import_win32()
         pythoncom.CoInitialize()
         self._client = client
         self.shell = client.Dispatch("Shell.Application")
         self.device = self._find_device(device_name)
         self.label = f"iPhone MTP ({self.device.Name})"
-        self.include_videos = include_videos
-        self.include_sidecars = include_sidecars
+        self.accept_kinds = set(accept_kinds) if accept_kinds is not None else None
         self.copy_timeout = copy_timeout
         self._folders: dict[str, object] = {}
 
@@ -115,14 +113,7 @@ class MtpSource(Source):
             return None
 
     def _accepts(self, name: str) -> bool:
-        if not is_media_name(name):
-            return False
-        kind = kind_for_name(name)
-        if kind == "video" and not self.include_videos:
-            return False
-        if kind == "sidecar" and not self.include_sidecars:
-            return False
-        return True
+        return accepts_kind(name, self.accept_kinds)
 
     def _size_of(self, item) -> int:
         for prop in ("System.Size",):

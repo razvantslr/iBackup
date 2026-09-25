@@ -5,9 +5,10 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from ibackup import pipeline
+from ibackup import cli, pipeline
 from ibackup.config import Config
 from ibackup.db import Database
 from ibackup.geocode import Geocoder
@@ -50,7 +51,8 @@ class PipelineTestCase(unittest.TestCase):
         with Database(cfg.db_path) as db:
             geo = Geocoder(CITIES, radius_km=cfg.geo_radius_km,
                            prefer=cfg.geo_prefer, aliases=cfg.geo_aliases)
-            source = FolderSource(source_dir or self.src, skip_dirs=cfg.skip_dirs)
+            source = FolderSource(source_dir or self.src, skip_dirs=cfg.skip_dirs,
+                                  accept_kinds=cfg.allowed_kinds())
             importer = pipeline.Importer(cfg, db, geo, self.report, dry_run=dry_run)
             stats = importer.import_source(source)
             rows = [dict(r) for r in db.all_media()]
@@ -318,6 +320,81 @@ class FreeSpaceTests(PipelineTestCase):
         stats, _ = self.run_import()
         self.assertEqual(stats.imported, 3)
         self.assertEqual(stats.errors, 0)
+
+
+class KindFilterTests(PipelineTestCase):
+    def mixed_source(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        synth.write_png(self.src / "Screenshot 2025-01-14 at 19.00.00.png")
+        (self.src / "IMG_0050.MOV").write_bytes(synth.build_mov())
+
+    def test_only_keeps_a_single_kind(self):
+        self.mixed_source()
+        cfg = Config(dest=self.dest, kinds=["video"], infer_enabled=False)
+        stats, rows = self.run_import(cfg=cfg)
+
+        self.assertEqual(stats.imported, 1)
+        self.assertEqual(stats.scanned, 1)  # the rest never got enumerated
+        self.assertEqual(rows[0]["kind"], "video")
+
+    def test_excluding_screenshots_still_scans_the_photos(self):
+        self.mixed_source()
+        cfg = Config(dest=self.dest,
+                     kinds=["photo", "video", "sidecar"], infer_enabled=False)
+        stats, rows = self.run_import(cfg=cfg)
+
+        # A screenshot only reveals itself once its metadata is read, so it is
+        # scanned and then dropped, not skipped during enumeration.
+        self.assertEqual(stats.scanned, 3)
+        self.assertEqual(stats.filtered, 1)
+        self.assertEqual(stats.imported, 2)
+        self.assertNotIn("screenshot", {r["kind"] for r in rows})
+        self.assertEqual(list(self.dest.glob("Screenshots")), [])
+
+    def test_excluding_videos_skips_them_during_enumeration(self):
+        self.mixed_source()
+        cfg = Config(dest=self.dest,
+                     kinds=["photo", "screenshot", "sidecar"], infer_enabled=False)
+        stats, _ = self.run_import(cfg=cfg)
+        self.assertEqual(stats.scanned, 2)
+        self.assertEqual(stats.filtered, 0)
+
+
+class KindFilterArgumentTests(unittest.TestCase):
+    """The --only / --include / --exclude resolution, without touching disk."""
+
+    def resolve(self, **kwargs):
+        cfg = Config(dest=Path("E:/Backup"))
+        fields = {"only": None, "include": None, "exclude": None}
+        fields.update(kwargs)
+        cli._apply_kind_filter(cfg, SimpleNamespace(**fields))
+        return cfg.allowed_kinds()
+
+    def test_no_filter_uses_the_config_defaults(self):
+        self.assertEqual(self.resolve(),
+                         {"photo", "screenshot", "video", "sidecar"})
+
+    def test_only_replaces_the_set(self):
+        self.assertEqual(self.resolve(only=["video"]), {"video"})
+
+    def test_exclude_removes_from_the_defaults(self):
+        self.assertEqual(self.resolve(exclude=["screenshot", "sidecar"]),
+                         {"photo", "video"})
+
+    def test_include_adds_to_the_defaults(self):
+        cfg = Config(dest=Path("E:/Backup"), include_videos=False)
+        args = SimpleNamespace(only=None, include=["video"], exclude=None)
+        cli._apply_kind_filter(cfg, args)
+        self.assertIn("video", cfg.allowed_kinds())
+
+    def test_two_filters_at_once_are_refused(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.resolve(only=["photo"], exclude=["video"])
+        self.assertIn("only one of", str(ctx.exception))
+
+    def test_a_filter_that_leaves_nothing_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.resolve(exclude=["photo", "screenshot", "video", "sidecar"])
 
 
 class VerifyAndReindexTests(PipelineTestCase):
