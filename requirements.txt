@@ -1,0 +1,9 @@
+# The core has no dependencies: everything is stdlib Python 3.11+.
+# For the iPhone, pick one of the backends below.
+
+# AFC - recommended (faster, original files, partial reads).
+# Also needs the "Apple Devices" app from the Microsoft Store (the USB driver).
+# pymobiledevice3>=4.0
+
+# MTP - works with the driver Windows ships, without iTunes, but slower.
+# pywin32>=306
