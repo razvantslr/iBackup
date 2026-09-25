@@ -267,6 +267,10 @@ class Database:
         ).fetchone()
         return (row["place"], row["source"]) if row else None
 
+    def clear_place_cache(self) -> None:
+        """Drop the cached lookups; used when the geocoding settings change."""
+        self.conn.execute("DELETE FROM place_cache")
+
     def cache_place(self, lat: float, lon: float, place: str, source: str) -> None:
         self.conn.execute(
             "INSERT OR REPLACE INTO place_cache(lat, lon, place, source)"

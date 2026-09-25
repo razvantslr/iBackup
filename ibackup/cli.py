@@ -223,6 +223,20 @@ def cmd_reorganize(args) -> int:
         report.close()
 
 
+def cmd_regeocode(args) -> int:
+    cfg = _config_from_args(args)
+    report = _reporter(cfg, args, "regeocode")
+    try:
+        with Database(cfg.db_path) as db:
+            geo = build_geocoder(cfg, report)
+            stats = pipeline.regeocode(cfg, db, geo, report, dry_run=args.dry_run)
+        title = "Regeocode (DRY-RUN, nothing moved):" if args.dry_run else "Regeocode:"
+        report.summary(title, stats)
+        return 0
+    finally:
+        report.close()
+
+
 def cmd_reindex(args) -> int:
     cfg = _config_from_args(args)
     report = _reporter(cfg, args, "reindex")
@@ -344,6 +358,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="re-apply the layout rules to the whole backup")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_reorganize)
+
+    p = sub.add_parser("regeocode",
+                       help="recompute the locations from the stored coordinates")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--radius-km", type=float, help="how far away a city may be")
+    p.set_defaults(func=cmd_regeocode)
 
     p = sub.add_parser("reindex", help="rebuild the index from the existing files")
     p.set_defaults(func=cmd_reindex)

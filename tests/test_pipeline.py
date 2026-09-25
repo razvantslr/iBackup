@@ -566,6 +566,89 @@ class ReorganizeTests(PipelineTestCase):
         self.assertEqual(stats["moved"], 1)  # the screenshot still moved
 
 
+class RegeocodeTests(PipelineTestCase):
+    """A richer dataset must be able to fix locations already written down."""
+
+    # Sitges is 35 km from Barcelona: outside the default radius, so with only
+    # the coarse list a photo taken there gets a bare grid label.
+    SITGES = (41.2350, 1.8120)
+    RICH_CITIES = CITIES + [("Sitges", "ES", 41.2350, 1.8120, 28000)]
+
+    def seed(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), self.SITGES)
+        self.photo("IMG_0002.jpg", datetime(2025, 1, 14, 18, 5), BARCELONA)
+        self.run_import(cfg=Config(dest=self.dest, infer_enabled=False))
+
+    def regeocode(self, cities, dry_run=False, **cfg_kwargs):
+        cfg = Config(dest=self.dest, infer_enabled=False, **cfg_kwargs)
+        with Database(cfg.db_path) as db:
+            geo = Geocoder(cities, radius_km=cfg.geo_radius_km,
+                           prefer=cfg.geo_prefer, aliases=cfg.geo_aliases)
+            stats = pipeline.regeocode(cfg, db, geo, self.report, dry_run=dry_run)
+            rows = [dict(r) for r in db.all_media()]
+        return stats, rows
+
+    def test_a_grid_label_becomes_a_city(self):
+        self.seed()
+        self.assertIn("2025/01_ianuarie/GPS_41.2N_1.8E/IMG_0001.jpg",
+                      self.rel_paths())
+
+        stats, rows = self.regeocode(self.RICH_CITIES)
+        self.assertEqual(stats["changed"], 1)
+        self.assertEqual(stats["moved"], 1)
+        self.assertEqual(stats["missing"], 0)
+        self.assertIn("2025/01_ianuarie/Sitges/IMG_0001.jpg", self.rel_paths())
+        self.assertNotIn("GPS_41.2N_1.8E",
+                         {r["place"] for r in rows})
+
+    def test_the_stale_place_cache_does_not_win(self):
+        """The first import cached the old answer for these coordinates."""
+        self.seed()
+        key = Geocoder(CITIES).cluster_key(*self.SITGES)
+        with Database(self.cfg.db_path) as db:
+            cached = db.cached_place(*key)
+        self.assertIsNotNone(cached)
+        self.assertTrue(cached[0].startswith("GPS_"), cached)
+
+        self.regeocode(self.RICH_CITIES)
+        with Database(self.cfg.db_path) as db:
+            self.assertEqual(db.cached_place(*key)[0], "Sitges")
+
+    def test_widening_the_radius_reaches_the_bigger_city(self):
+        self.seed()
+        stats, _ = self.regeocode(CITIES, geo_radius_km=50.0)
+        self.assertEqual(stats["changed"], 1)
+        self.assertIn("2025/01_ianuarie/Barcelona/IMG_0001.jpg", self.rel_paths())
+
+    def test_an_alias_is_applied(self):
+        self.seed()
+        stats, _ = self.regeocode(CITIES, geo_aliases={"Barcelona": "Vacanta"})
+        self.assertEqual(stats["changed"], 1)
+        self.assertIn("2025/01_ianuarie/Vacanta/IMG_0002.jpg", self.rel_paths())
+
+    def test_dry_run_changes_nothing(self):
+        self.seed()
+        before = self.rel_paths()
+        stats, rows = self.regeocode(self.RICH_CITIES, dry_run=True)
+        self.assertEqual(stats["changed"], 1)
+        self.assertEqual(self.rel_paths(), before)
+        self.assertEqual({r["rel_path"] for r in rows}, set(before))
+
+    def test_running_it_twice_changes_nothing_the_second_time(self):
+        self.seed()
+        self.regeocode(self.RICH_CITIES)
+        stats, _ = self.regeocode(self.RICH_CITIES)
+        self.assertEqual(stats["changed"], 0)
+
+    def test_photos_without_coordinates_are_left_alone(self):
+        self.photo("IMG_0009.jpg", datetime(2025, 3, 1, 12, 0), None)
+        self.run_import(cfg=Config(dest=self.dest, infer_enabled=False))
+        before = self.rel_paths()
+        stats, _ = self.regeocode(self.RICH_CITIES)
+        self.assertEqual(stats["changed"], 0)
+        self.assertEqual(self.rel_paths(), before)
+
+
 class VerifyAndReindexTests(PipelineTestCase):
     def test_verify_passes_then_catches_damage(self):
         self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)

@@ -61,6 +61,7 @@ After `init` the path is stored in `config.toml`, so from elsewhere you can pass
 | `verify [--deep]` | Check the files on the SSD against the index. |
 | `relocate` | Run the location guessing on its own. |
 | `reorganize` | Re-apply the layout rules to the whole backup after a config change. |
+| `regeocode` | Recompute the locations from the stored coordinates after a geocoding change. |
 | `reindex` | Rebuild the index from the existing files (if `index.db` is lost). |
 | `geonames --download` | Install the full place dataset for geocoding. |
 
@@ -173,6 +174,12 @@ Layout settings can be changed on a backup that already exists: edit the config
 and run `reorganize`. (Filenames are left alone, so `rename_with_timestamp`
 applies to newly imported files only.)
 
+Geocoding settings work the same way, but through `regeocode`: a place name is
+written into the index once, at import time, so installing the GeoNames dataset,
+widening `radius_km` or adding an alias only affects future imports until you run
+it. `regeocode` recomputes every location from the coordinates already in the
+index and moves whatever changed.
+
 ## iPhone: read this first
 
 - **Unlock the phone** and accept *Trust This Computer* on first connection.
@@ -203,13 +210,17 @@ That fetches `cities5000.zip` (~2 MB) from geonames.org and converts it into a
 local TSV - roughly 50,000 places, offline, permanently. To download it yourself
 instead, use `geonames --install cities5000.zip`.
 
+Installing it before the first import saves a step, but it is not a one-way door:
+run `regeocode` afterwards and everything already filed under a `GPS_44.4N_26.1E`
+folder gets its real city name.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
 
-115 tests, no dependencies. The test files (JPEG with EXIF, PNG, HEIC, MOV) are
+123 tests, no dependencies. The test files (JPEG with EXIF, PNG, HEIC, MOV) are
 built byte by byte in `tests/synth.py`, so the tests exercise exactly our parsers
 without keeping real photos in the repo.
 
@@ -227,7 +238,7 @@ important one, since `mtime` on an old backup folder is when the file was last
 copied, not when the photo was taken; reverse geocoding into city folders;
 reading the iPhone directly over AFC or MTP; Live Photo pairing; collision-safe
 naming; atomic writes with verification; an index of the backup rather than of
-the sources; `verify`, `reindex`, `relocate` and `reorganize`; and a test suite.
+the sources; `verify`, `reindex`, `relocate`, `reorganize` and `regeocode`; and a test suite.
 
 Fixed along the way: two photos with the same name in the same month used to
 overwrite each other silently; the "already backed up" check looked in the backup

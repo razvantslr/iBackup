@@ -87,6 +87,7 @@ class Reporter:
         "inferred_places": "locations guessed from neighbouring photos",
         "errors": "errors",
         "checked": "files checked",
+        "changed": "locations renamed",
         "moved": "files moved",
         "missing": "missing from the backup",
         "size_mismatch": "size differs from the index",

@@ -486,6 +486,37 @@ class Importer:
 
 # --- phases that can also run on their own ---------------------------------
 
+def _parse_taken(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _relocate_file(cfg: Config, report: Reporter, row, new_rel: PurePosixPath,
+                   reserved: set[str], dry_run: bool) -> str | None:
+    """Move an indexed file into a new folder; returns its new relative path.
+
+    Shared by the three phases that rearrange an existing backup. None means the
+    file was not where the index said it would be, and the caller should count
+    that as missing and leave the row alone.
+    """
+    old_abs = cfg.dest / row["rel_path"]
+    if not old_abs.is_file():
+        report.warn(f"missing from the backup: {row['rel_path']}")
+        return None
+    new_abs = unique_path(cfg.dest / new_rel, reserved)
+    rel_final = new_abs.relative_to(cfg.dest).as_posix()
+    reserved.add(str(new_abs).lower())
+    if not dry_run:
+        new_abs.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(old_abs, new_abs)
+        _prune_empty(old_abs.parent, cfg.dest)
+    return rel_final
+
+
 def infer_locations(cfg: Config, db: Database, report: Reporter,
                     dry_run: bool = False) -> int:
     """Move photos without GPS into the location guessed from their neighbours.
@@ -498,6 +529,7 @@ def infer_locations(cfg: Config, db: Database, report: Reporter,
     if not rows:
         return 0
     moved = 0
+    reserved: set[str] = set()
     for row in rows:
         # Screenshots are filed by kind, not by place, so a guessed location
         # would not change where they live - and a screenshot taken during a
@@ -507,32 +539,25 @@ def infer_locations(cfg: Config, db: Database, report: Reporter,
         neighbor = db.nearest_located_in_time(row["taken_at"], cfg.infer_window_hours)
         if neighbor is None or not neighbor["place"] or neighbor["place"] == unknown:
             continue
-        try:
-            taken = datetime.fromisoformat(row["taken_at"])
-        except (TypeError, ValueError):
+        taken = _parse_taken(row["taken_at"])
+        if taken is None:
             continue
-        new_dir = organize.dest_dir(taken, neighbor["place"], row["kind"], cfg)
-        new_rel = new_dir / row["filename"]
+        new_rel = (organize.dest_dir(taken, neighbor["place"], row["kind"], cfg)
+                   / row["filename"])
         if new_rel.as_posix() == row["rel_path"]:
             continue
-        old_abs = cfg.dest / row["rel_path"]
-        if not old_abs.is_file():
-            report.warn(f"missing from the backup: {row['rel_path']}")
+        rel_final = _relocate_file(cfg, report, row, new_rel, reserved, dry_run)
+        if rel_final is None:
             continue
-        new_abs = unique_path(cfg.dest / new_rel)
-        rel_final = new_abs.relative_to(cfg.dest).as_posix()
         report.detail(f"location guessed: {row['rel_path']} -> {rel_final} "
                       f"(after {neighbor['filename']})")
         if not dry_run:
-            new_abs.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(old_abs, new_abs)
             db.update_location(
                 int(row["id"]), place=neighbor["place"],
                 place_source="inferred:time-neighbour",
                 lat=neighbor["lat"], lon=neighbor["lon"],
                 gps_source="inferred", rel_path=rel_final,
             )
-            _prune_empty(old_abs.parent, cfg.dest)
         moved += 1
     if moved and not dry_run:
         db.conn.commit()
@@ -574,33 +599,77 @@ def reorganize(cfg: Config, db: Database, report: Reporter,
     reserved: set[str] = set()
     for row in list(db.all_media()):
         stats["checked"] += 1
-        taken = None
-        if row["taken_at"]:
-            try:
-                taken = datetime.fromisoformat(row["taken_at"])
-            except ValueError:
-                taken = None
+        taken = _parse_taken(row["taken_at"])
         new_dir = organize.dest_dir(taken, row["place"], row["kind"], cfg)
-        new_rel = (new_dir / row["filename"]).as_posix()
-        if new_rel == row["rel_path"]:
+        new_rel = new_dir / row["filename"]
+        if new_rel.as_posix() == row["rel_path"]:
             continue
 
-        old_abs = cfg.dest / row["rel_path"]
-        if not old_abs.is_file():
+        rel_final = _relocate_file(cfg, report, row, new_rel, reserved, dry_run)
+        if rel_final is None:
             stats["missing"] += 1
-            report.warn(f"missing from the backup: {row['rel_path']}")
             continue
-
-        new_abs = unique_path(cfg.dest / new_rel, reserved)
-        rel_final = new_abs.relative_to(cfg.dest).as_posix()
-        reserved.add(str(new_abs).lower())
         report.detail(f"{row['rel_path']} -> {rel_final}")
         if not dry_run:
-            new_abs.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(old_abs, new_abs)
             db.set_rel_path(int(row["id"]), rel_final)
-            _prune_empty(old_abs.parent, cfg.dest)
         stats["moved"] += 1
+        report.progress(stats["checked"], None, "checked")
+
+    if not dry_run:
+        db.conn.commit()
+    return stats
+
+
+def regeocode(cfg: Config, db: Database, geocoder: Geocoder, report: Reporter,
+              dry_run: bool = False) -> dict:
+    """Recompute every location from its stored coordinates and move what moved.
+
+    A place name is written into the index once, at import time, so installing a
+    better dataset, widening the radius or adding an alias would otherwise only
+    affect future imports - the photos already filed under GPS_45.3N_25.5E would
+    stay there forever. This is the geocoding counterpart of reorganize.
+    """
+    stats = {"checked": 0, "changed": 0, "moved": 0, "missing": 0}
+    if not dry_run:
+        # The cache holds answers from the settings we are replacing.
+        db.clear_place_cache()
+
+    resolved: dict[tuple[float, float], tuple[str, str]] = {}
+    reserved: set[str] = set()
+    for row in list(db.all_media()):
+        stats["checked"] += 1
+        lat, lon = row["lat"], row["lon"]
+        if lat is None or lon is None:
+            continue
+
+        key = geocoder.cluster_key(lat, lon)
+        if key not in resolved:
+            name, source = geocoder.place_name(lat, lon)
+            resolved[key] = (organize.place_folder(name, cfg), source)
+            if not dry_run:
+                db.cache_place(key[0], key[1], *resolved[key])
+        place, place_source = resolved[key]
+        if place == row["place"]:
+            continue
+
+        stats["changed"] += 1
+        report.detail(f"{row['place']} -> {place}: {row['rel_path']}")
+        taken = _parse_taken(row["taken_at"])
+        new_rel = organize.dest_dir(taken, place, row["kind"], cfg) / row["filename"]
+        rel_final = row["rel_path"]
+        if new_rel.as_posix() != rel_final:
+            moved_to = _relocate_file(cfg, report, row, new_rel, reserved, dry_run)
+            if moved_to is None:
+                stats["missing"] += 1
+                continue
+            rel_final = moved_to
+            stats["moved"] += 1
+        if not dry_run:
+            db.update_location(
+                int(row["id"]), place=place, place_source=place_source,
+                lat=lat, lon=lon, gps_source=row["gps_source"] or "",
+                rel_path=rel_final,
+            )
         report.progress(stats["checked"], None, "checked")
 
     if not dry_run:
