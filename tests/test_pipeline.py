@@ -353,6 +353,18 @@ class KindFilterTests(PipelineTestCase):
         self.assertNotIn("screenshot", {r["kind"] for r in rows})
         self.assertEqual(list(self.dest.glob("Screenshots")), [])
 
+    def test_the_filter_still_applies_on_a_cached_re_run(self):
+        """The remembered row carries the kind, so stats stay honest."""
+        self.mixed_source()
+        self.run_import(cfg=Config(dest=self.dest, infer_enabled=False))
+
+        cfg = Config(dest=self.dest,
+                     kinds=["photo", "video", "sidecar"], infer_enabled=False)
+        stats, _ = self.run_import(cfg=cfg)
+        self.assertEqual(stats.filtered, 1)
+        self.assertEqual(stats.duplicates, 2)
+        self.assertEqual(stats.imported, 0)
+
     def test_excluding_videos_skips_them_during_enumeration(self):
         self.mixed_source()
         cfg = Config(dest=self.dest,

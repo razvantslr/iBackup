@@ -339,8 +339,10 @@ class Database:
         out = dict(cur)
         out["places"] = [
             dict(row) for row in self.conn.execute(
+                # Screenshots are filed by kind, so their place column is
+                # meaningless and would distort the tally.
                 "SELECT place, COUNT(*) AS n FROM media WHERE place IS NOT NULL"
-                " GROUP BY place ORDER BY n DESC LIMIT 20"
+                " AND kind != 'screenshot' GROUP BY place ORDER BY n DESC LIMIT 20"
             )
         ]
         out["years"] = [

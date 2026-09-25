@@ -190,7 +190,14 @@ class Importer:
         fp, decided = self._recall(item)
         if decided is not None:
             # We already decided about this exact file on an earlier run, so
-            # there is nothing to read: it is a duplicate of that row.
+            # there is nothing to read: it is a duplicate of that row. The
+            # remembered row also tells us its kind, so the filter can still be
+            # honoured in the statistics.
+            if decided["kind"] not in self.allowed_kinds:
+                self.stats.filtered += 1
+                self.report.detail(
+                    f"filtered out ({decided['kind']}): {item.name}")
+                return None
             return self._on_duplicate(item, fp, decided)
 
         if fp is None and not source.supports_random_read:
