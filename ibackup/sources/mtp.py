@@ -210,6 +210,12 @@ class MtpSource(Source):
                     size = candidate.stat().st_size
                 except OSError:
                     size = -1
+                # The device already told us how big the file is, so normally
+                # there is nothing to wait for once that many bytes have landed.
+                # Waiting for the size to merely stop changing would add half a
+                # second to every single file - an hour and a half over 10,000.
+                if item.size and size == item.size:
+                    return candidate
                 if size > 0 and size == last_size:
                     if stable_since is None:
                         stable_since = time.monotonic()
@@ -218,7 +224,7 @@ class MtpSource(Source):
                 else:
                     stable_since = None
                 last_size = size
-            time.sleep(0.15)
+            time.sleep(0.05)
         raise TimeoutError(f"Copying {item.name} from the phone timed out")
 
     def close(self) -> None:
