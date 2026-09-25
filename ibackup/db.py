@@ -285,6 +285,7 @@ class Database:
             "SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes,"
             " SUM(CASE WHEN kind = 'photo' THEN 1 ELSE 0 END) AS photos,"
             " SUM(CASE WHEN kind = 'video' THEN 1 ELSE 0 END) AS videos,"
+            " SUM(CASE WHEN kind = 'screenshot' THEN 1 ELSE 0 END) AS screenshots,"
             " SUM(CASE WHEN lat IS NOT NULL THEN 1 ELSE 0 END) AS with_gps,"
             " MIN(taken_at) AS first_taken, MAX(taken_at) AS last_taken"
             " FROM media"

@@ -35,10 +35,11 @@ class MediaMeta:
     lat: float | None = None
     lon: float | None = None
     gps_source: str = ""
-    kind: str = "other"                       # photo | video | sidecar | other
+    kind: str = "other"       # photo | screenshot | video | sidecar | other
     make: str | None = None
     model: str | None = None
     software: str | None = None
+    screenshot_reason: str = ""
 
     @property
     def has_gps(self) -> bool:
@@ -126,7 +127,8 @@ def _read_exif_block(path: Path, ext: str):
     return None
 
 
-def extract(path, *, use_filename: bool = True, use_mtime: bool = True) -> MediaMeta:
+def extract(path, *, use_filename: bool = True, use_mtime: bool = True,
+            detect_screenshots: bool = True) -> MediaMeta:
     """Metadata for a local file. Never raises on a damaged file."""
     path = Path(path)
     name = path.name
@@ -166,6 +168,15 @@ def extract(path, *, use_filename: bool = True, use_mtime: bool = True) -> Media
                         meta.taken_at_source = "exif:GPSDateStamp"
         except Exception:
             pass
+
+    # Runs before the filename and mtime fallbacks, while taken_at_source still
+    # tells us truthfully whether the file carried an EXIF date of its own.
+    if meta.kind == "photo" and detect_screenshots:
+        from .screenshot import screenshot_reason
+        reason = screenshot_reason(path, meta)
+        if reason is not None:
+            meta.kind = "screenshot"
+            meta.screenshot_reason = reason
 
     if meta.taken_at is None and use_filename:
         from_name = datetime_from_name(name)

@@ -269,7 +269,11 @@ class Importer:
         if kind == "sidecar":
             meta = MediaMeta(kind="sidecar")
         else:
-            meta = extract(local.path)
+            meta = extract(local.path,
+                           detect_screenshots=self.cfg.detect_screenshots)
+            if meta.kind == "screenshot":
+                self.report.detail(
+                    f"screenshot ({meta.screenshot_reason}): {item.name}")
 
         if meta.taken_at is None and item.mtime:
             meta.taken_at = datetime.fromtimestamp(item.mtime)
@@ -400,6 +404,11 @@ def infer_locations(cfg: Config, db: Database, report: Reporter,
         return 0
     moved = 0
     for row in rows:
+        # Screenshots are filed by kind, not by place, so a guessed location
+        # would not change where they live - and a screenshot taken during a
+        # trip is not evidence of anything anyway.
+        if row["kind"] == "screenshot" and cfg.screenshot_dir:
+            continue
         neighbor = db.nearest_located_in_time(row["taken_at"], cfg.infer_window_hours)
         if neighbor is None or not neighbor["place"] or neighbor["place"] == unknown:
             continue

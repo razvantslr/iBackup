@@ -236,6 +236,38 @@ class InferLocationTests(PipelineTestCase):
         self.assertFalse((self.dest / "2025/01_ianuarie/Fara_locatie").exists())
 
 
+class ScreenshotTests(PipelineTestCase):
+    def test_screenshots_are_filed_in_their_own_tree(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        synth.write_png(self.src / "Screenshot 2025-01-14 at 19.05.11.png")
+        stats, rows = self.run_import()
+
+        self.assertEqual(stats.imported, 2)
+        self.assertEqual(self.rel_paths(), [
+            "2025/01_ianuarie/Barcelona/IMG_0001.jpg",
+            "Screenshots/2025/01_ianuarie/Screenshot_2025-01-14_at_19.05.11.png",
+        ])
+        kinds = {r["filename"]: r["kind"] for r in rows}
+        self.assertEqual(kinds["IMG_0001.jpg"], "photo")
+
+    def test_a_screenshot_does_not_get_a_guessed_location(self):
+        """It has no GPS, but it must not be dragged into the photo's city."""
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        synth.write_png(self.src / "Screenshot 2025-01-14 at 18.30.00.png")
+        stats, rows = self.run_import()
+
+        self.assertEqual(stats.inferred_places, 0)
+        shot = [r for r in rows if r["kind"] == "screenshot"][0]
+        self.assertTrue(shot["rel_path"].startswith("Screenshots/"))
+
+    def test_screenshot_dir_can_be_turned_off(self):
+        cfg = Config(dest=self.dest, screenshot_dir="", infer_enabled=False)
+        synth.write_png(self.src / "Screenshot 2025-01-14.png")
+        self.run_import(cfg=cfg)
+        self.assertEqual(self.rel_paths(),
+                         ["2025/01_ianuarie/Fara_locatie/Screenshot_2025-01-14.png"])
+
+
 class VerifyAndReindexTests(PipelineTestCase):
     def test_verify_passes_then_catches_damage(self):
         self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)

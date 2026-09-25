@@ -132,6 +132,7 @@ def cmd_status(args) -> int:
     print(f"Backup: {cfg.dest}")
     print(f"  files        : {stats['n']} ({human_size(stats['bytes'] or 0)})")
     print(f"  photos/videos: {stats['photos'] or 0} / {stats['videos'] or 0}")
+    print(f"  screenshots  : {stats['screenshots'] or 0}")
     print(f"  with GPS     : {stats['with_gps'] or 0}")
     print(f"  duplicates seen over time: {stats['duplicates_seen']}")
     if stats["first_taken"]:

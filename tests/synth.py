@@ -6,6 +6,7 @@ without keeping real photos in the repo and without external dependencies.
 from __future__ import annotations
 
 import struct
+import zlib
 from datetime import datetime
 
 
@@ -53,13 +54,16 @@ def _dms(value: float):
 
 
 def build_exif(taken_at: datetime | None = None, gps=None,
-               make: str | None = "Apple", model: str | None = "iPhone 13") -> bytes:
-    """A TIFF/EXIF block carrying the date, GPS and the camera name."""
+               make: str | None = "Apple", model: str | None = "iPhone 13",
+               software: str | None = None) -> bytes:
+    """A TIFF/EXIF block carrying the date, GPS, camera name and Software tag."""
     ifd0 = []
     if make:
         ifd0.append((0x010F, 2, make))
     if model:
         ifd0.append((0x0110, 2, model))
+    if software:
+        ifd0.append((0x0131, 2, software))
 
     exif_entries = []
     if taken_at is not None:
@@ -183,6 +187,40 @@ def build_mov(created: str | None = "2019-07-12T18:30:42+0300",
     udta = _box(b"udta", udta_children) if udta_children else b""
 
     return ftyp + _box(b"moov", mvhd + udta) + _box(b"mdat", b"\x00" * 32)
+
+
+# --- PNG --------------------------------------------------------------------
+
+def _png_chunk(ctype: bytes, payload: bytes) -> bytes:
+    return (struct.pack(">I", len(payload)) + ctype + payload
+            + struct.pack(">I", zlib.crc32(ctype + payload) & 0xFFFFFFFF))
+
+
+def build_png(exif_block: bytes | None = None, width: int = 1170,
+              height: int = 2532) -> bytes:
+    """A minimal but structurally valid PNG, optionally carrying an eXIf chunk.
+
+    The default size is an iPhone screen, since these mostly stand in for
+    screenshots in the tests.
+    """
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    out = b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", ihdr)
+    if exif_block:
+        out += _png_chunk(b"eXIf", exif_block)
+    out += _png_chunk(b"IDAT", zlib.compress(b"\x00" * 16))
+    out += _png_chunk(b"IEND", b"")
+    return out
+
+
+def write_png(path, taken_at=None, gps=None, make=None, model=None,
+              software=None, width=1170, height=2532):
+    """Write a test PNG and return its path."""
+    block = None
+    if taken_at or gps or make or model or software:
+        block = build_exif(taken_at, gps, make, model, software)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(build_png(block, width, height))
+    return path
 
 
 def write_photo(path, taken_at=None, gps=None, payload=b"\x00" * 64,

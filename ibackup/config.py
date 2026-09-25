@@ -19,6 +19,10 @@ class Config:
     language: str = "ro"
     unknown_place: str = "Fara_locatie"
     video_subdir: str = ""          # empty: videos sit next to photos
+    # "Screenshots" = its own tree at the root; "./Screenshots" = inside the
+    # month folder; "" = no special handling, screenshots are filed as photos.
+    screenshot_dir: str = "Screenshots"
+    detect_screenshots: bool = True
     rename_with_timestamp: bool = False
 
     # Duplicates
@@ -81,6 +85,8 @@ _SECTION_KEYS = {
         "language": "language",
         "unknown_place": "unknown_place",
         "video_subdir": "video_subdir",
+        "screenshot_dir": "screenshot_dir",
+        "detect_screenshots": "detect_screenshots",
         "rename_with_timestamp": "rename_with_timestamp",
     },
     "dedup": {
@@ -167,6 +173,9 @@ dest = "{dest_text}"
 language = "ro"               # language of the month folder names: ro or en
 unknown_place = "Fara_locatie"
 video_subdir = ""             # e.g. "Video" to keep videos separate
+screenshot_dir = "Screenshots"  # own tree; "./Screenshots" = inside the month;
+                                # "" = file screenshots like ordinary photos
+detect_screenshots = true
 rename_with_timestamp = false # true => 20250114_183042_IMG_0001.heic
 
 [dedup]

@@ -31,17 +31,31 @@ def target_filename(name: str, taken_at: datetime | None, cfg: Config,
     return clean
 
 
+def date_parts(taken_at: datetime | None, cfg: Config) -> list[str]:
+    """The time half of a path: ['2025', '01_ianuarie'], or the no-date folder."""
+    if taken_at is None:
+        return [NO_DATE_FOLDER]
+    return [f"{taken_at.year:04d}", month_folder(taken_at.month, cfg.language)]
+
+
 def dest_dir(taken_at: datetime | None, place: str | None, kind: str,
              cfg: Config) -> PurePosixPath:
-    """The folder, relative to the backup root, where a file belongs."""
-    if taken_at is None:
-        parts = [NO_DATE_FOLDER, place_folder(place, cfg)]
-    else:
-        parts = [
-            f"{taken_at.year:04d}",
-            month_folder(taken_at.month, cfg.language),
-            place_folder(place, cfg),
-        ]
+    """The folder, relative to the backup root, where a file belongs.
+
+    Screenshots are filed by kind rather than by place: they almost never carry
+    GPS, so they would all pile up in the "no location" folder, and a name like
+    `Barcelona` answers a different question than `Screenshots` does.
+    """
+    if kind == "screenshot" and cfg.screenshot_dir:
+        spec = cfg.screenshot_dir
+        if spec.startswith("./"):
+            # "./Screenshots" keeps them inside the month, next to the places.
+            leaf = sanitize_component(spec[2:], fallback="Screenshots")
+            return PurePosixPath(*date_parts(taken_at, cfg), leaf)
+        root = sanitize_component(spec, fallback="Screenshots")
+        return PurePosixPath(root, *date_parts(taken_at, cfg))
+
+    parts = [*date_parts(taken_at, cfg), place_folder(place, cfg)]
     if kind == "video" and cfg.video_subdir:
         parts.append(sanitize_component(cfg.video_subdir, fallback="Video"))
     return PurePosixPath(*parts)
