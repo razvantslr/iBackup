@@ -54,6 +54,8 @@ class Config:
 
     # Safety
     verify_after_copy: bool = True
+    # Refuse to keep copying once the backup drive drops below this.
+    min_free_gb: float = 1.0
 
     @property
     def internal_dir(self) -> Path:
@@ -112,6 +114,7 @@ _SECTION_KEYS = {
     },
     "safety": {
         "verify_after_copy": "verify_after_copy",
+        "min_free_gb": "min_free_gb",
     },
 }
 
@@ -203,6 +206,7 @@ sidecars = true
 
 [safety]
 verify_after_copy = true
+min_free_gb = 1.0             # stop before the backup drive fills up
 ''',
         encoding="utf-8",
     )

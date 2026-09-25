@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from ibackup import pipeline
 from ibackup.config import Config
@@ -266,6 +267,57 @@ class ScreenshotTests(PipelineTestCase):
         self.run_import(cfg=cfg)
         self.assertEqual(self.rel_paths(),
                          ["2025/01_ianuarie/Fara_locatie/Screenshot_2025-01-14.png"])
+
+
+class FreeSpaceTests(PipelineTestCase):
+    def three_photos(self):
+        names = ["IMG_0001.jpg", "IMG_0002.jpg", "IMG_0003.jpg"]
+        paths = [self.photo(n, datetime(2025, 1, 14, 18, i), BARCELONA)
+                 for i, n in enumerate(names)]
+        return [p.stat().st_size for p in paths]
+
+    def test_import_stops_when_the_drive_fills_up(self):
+        sizes = self.three_photos()
+        cfg = Config(dest=self.dest, min_free_gb=0.0, infer_enabled=False)
+        budget = sizes[0] + sizes[1]  # room for exactly two files
+
+        with patch("ibackup.pipeline.free_space", side_effect=[budget, 0]):
+            stats, rows = self.run_import(cfg=cfg)
+
+        self.assertEqual(stats.imported, 2)
+        self.assertEqual(stats.errors, 1)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(self.rel_paths()), 2)
+
+    def test_what_was_copied_before_stopping_stays_valid(self):
+        sizes = self.three_photos()
+        cfg = Config(dest=self.dest, min_free_gb=0.0, infer_enabled=False)
+        with patch("ibackup.pipeline.free_space", side_effect=[sizes[0], 0]):
+            self.run_import(cfg=cfg)
+
+        with Database(cfg.db_path) as db:
+            report = pipeline.verify_backup(cfg, db, self.report, deep=True)
+        self.assertEqual(report["checked"], 1)
+        self.assertEqual(report["missing"], 0)
+        self.assertEqual(report["hash_mismatch"], 0)
+        self.assertEqual(list(self.dest.rglob("*.part")), [])
+
+    def test_the_reserve_is_respected(self):
+        """Plenty of raw space, but min_free_gb must stay untouched."""
+        self.three_photos()
+        cfg = Config(dest=self.dest, min_free_gb=1.0, infer_enabled=False)
+        with patch("ibackup.pipeline.free_space", return_value=500 * 1024 * 1024):
+            stats, rows = self.run_import(cfg=cfg)
+
+        self.assertEqual(stats.imported, 0)
+        self.assertEqual(stats.errors, 1)
+        self.assertEqual(self.rel_paths(), [])
+
+    def test_a_normal_run_is_not_disturbed(self):
+        self.three_photos()
+        stats, _ = self.run_import()
+        self.assertEqual(stats.imported, 3)
+        self.assertEqual(stats.errors, 0)
 
 
 class VerifyAndReindexTests(PipelineTestCase):

@@ -26,9 +26,16 @@ from .hashing import Fingerprint, file_md5, partial_md5, partial_md5_from_reader
 from .mediameta import MediaMeta, extract, kind_for_name, utc_now
 from .reporter import Reporter
 from .sources.base import Localized, Source, SourceItem
-from .util import unique_path
+from .util import GB, free_space, human_size, unique_path
 
 _PRIMARY_ORDER = {"photo": 0, "video": 1, "sidecar": 2, "other": 3}
+
+# How many files may be copied between two disk-usage checks.
+SPACE_CHECK_EVERY = 50
+
+
+class NotEnoughSpace(RuntimeError):
+    """Raised to abort the run rather than fill the drive completely."""
 
 
 @dataclass
@@ -99,6 +106,8 @@ class Importer:
         self.run_id: int | None = None
         self._taken: set[str] = set()           # paths reserved by this run
         self._dry_seen: dict[tuple[int, str], str] = {}  # dry-run duplicates
+        self._free_bytes: int | None = None
+        self._checked_after: int = 0
         self.unknown_place = organize.place_folder(None, cfg)
 
     # --- API ---------------------------------------------------------------
@@ -122,6 +131,11 @@ class Importer:
                 self.report.progress(self.stats.scanned, source.count_hint(),
                                      f"{self.stats.imported} new, "
                                      f"{self.stats.duplicates} duplicates")
+        except NotEnoughSpace as exc:
+            self.stats.errors += 1
+            self.report.error(f"Stopped: {exc}")
+            self.report.info("Everything copied so far is indexed and valid; "
+                             "free some space and run the same command again.")
         finally:
             if not self.dry_run:
                 self.db.conn.commit()
@@ -152,6 +166,8 @@ class Importer:
     def _safe_process(self, source, item, group_key, anchor) -> Anchor | None:
         try:
             return self._process_item(source, item, group_key, anchor)
+        except NotEnoughSpace:
+            raise  # aborts the whole run, not just this file
         except Exception as exc:
             self.stats.errors += 1
             message = f"{item.ref}: {type(exc).__name__}: {exc}"
@@ -313,6 +329,7 @@ class Importer:
             self._dry_seen[fp.as_key()] = rel_final
             self.report.detail(f"would copy: {item.name} -> {rel_final}")
         else:
+            self._ensure_space(fp.size)
             self._place_file(local, dest_abs, fp, item)
             self.stats.imported += 1
             self.stats.bytes_copied += fp.size
@@ -363,6 +380,34 @@ class Importer:
             except OSError:
                 pass
         os.replace(temp, dest_abs)
+
+    def _ensure_space(self, needed: int) -> None:
+        """Stop before the drive fills up, without stat-ing it for every file.
+
+        v0.1 summed every source file and compared once, which both refused runs
+        that would have fitted (most files are usually already backed up) and
+        needed a full pre-pass - expensive over MTP. Checking as we go costs one
+        syscall per 50 files and reflects what is actually being written.
+        """
+        reserve = int(max(0.0, self.cfg.min_free_gb) * GB)
+        stale = (self._free_bytes is None
+                 or self.stats.imported - self._checked_after >= SPACE_CHECK_EVERY)
+        if stale:
+            self._free_bytes = free_space(self.cfg.dest)
+            self._checked_after = self.stats.imported
+
+        if self._free_bytes - needed < reserve:
+            # The cached figure may be out of date; confirm before giving up.
+            self._free_bytes = free_space(self.cfg.dest)
+            self._checked_after = self.stats.imported
+            if self._free_bytes - needed < reserve:
+                raise NotEnoughSpace(
+                    f"the backup drive is full: {human_size(self._free_bytes)} "
+                    f"free, {human_size(needed)} needed, and "
+                    f"{human_size(reserve)} must stay free "
+                    f"(safety.min_free_gb). Copied so far: {self.stats.imported}."
+                )
+        self._free_bytes -= needed
 
     def _resolve_place(self, lat, lon) -> tuple[str, str]:
         if lat is None or lon is None:
