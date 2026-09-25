@@ -55,6 +55,9 @@ class Config:
         "@eaDir", ".Trash", ".Trashes",
     ])
 
+    # Reuse the fingerprint of a source file whose size and mtime are unchanged.
+    use_source_cache: bool = True
+
     # Safety
     verify_after_copy: bool = True
     # Refuse to keep copying once the backup drive drops below this.
@@ -124,6 +127,7 @@ _SECTION_KEYS = {
     "include": {
         "videos": "include_videos",
         "sidecars": "include_sidecars",
+        "source_cache": "use_source_cache",
         "skip_dirs": "skip_dirs",
     },
     "safety": {
@@ -217,6 +221,7 @@ window_hours = 3.0
 [include]
 videos = true
 sidecars = true
+source_cache = true           # reuse fingerprints for unchanged source files
 
 [safety]
 verify_after_copy = true

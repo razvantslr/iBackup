@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_info (
@@ -61,6 +61,17 @@ CREATE TABLE IF NOT EXISTS duplicates (
     partial_md5      TEXT,
     matched_media_id INTEGER,
     seen_at          TEXT
+);
+
+CREATE TABLE IF NOT EXISTS source_cache (
+    source_kind TEXT    NOT NULL,
+    source_ref  TEXT    NOT NULL,
+    size        INTEGER NOT NULL,
+    mtime       REAL    NOT NULL,
+    partial_md5 TEXT    NOT NULL,
+    media_id    INTEGER,
+    seen_at     TEXT,
+    PRIMARY KEY (source_kind, source_ref)
 );
 
 CREATE TABLE IF NOT EXISTS place_cache (
@@ -211,6 +222,37 @@ class Database:
 
     def delete_media(self, media_id: int) -> None:
         self.conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
+
+    # --- source fingerprint cache ------------------------------------------
+
+    def cached_source(self, source_kind: str, source_ref: str,
+                      size: int, mtime: float):
+        """What we learned last time about this exact source file.
+
+        Matching on size AND mtime is the rsync heuristic: cheap, and wrong only
+        if a file changed while keeping both. --no-cache bypasses it. The stored
+        media_id records the decision we reached, so a re-run of the same folder
+        does not have to read the file again to reach it a second time.
+        """
+        return self.conn.execute(
+            "SELECT partial_md5, media_id FROM source_cache WHERE source_kind = ?"
+            " AND source_ref = ? AND size = ? AND mtime = ?",
+            (source_kind, source_ref, size, mtime),
+        ).fetchone()
+
+    def cache_source(self, source_kind: str, source_ref: str, size: int,
+                     mtime: float, partial_md5: str,
+                     media_id: int | None) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO source_cache(source_kind, source_ref, size,"
+            " mtime, partial_md5, media_id, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (source_kind, source_ref, size, mtime, partial_md5, media_id, _now()),
+        )
+
+    def media_by_id(self, media_id: int):
+        return self.conn.execute(
+            "SELECT * FROM media WHERE id = ?", (media_id,)
+        ).fetchone()
 
     # --- geocoding cache ---------------------------------------------------
 

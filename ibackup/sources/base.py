@@ -59,6 +59,15 @@ class Source:
         """Partial read, only for sources with supports_random_read."""
         raise NotImplementedError
 
+    def local_path(self, item: SourceItem) -> Path | None:
+        """The item's real path on this machine, when it has one.
+
+        Only a folder source does; for a phone the file exists nowhere locally
+        until it is fetched. The pipeline uses this to decide whether it can
+        confirm a duplicate with a full MD5 for free.
+        """
+        return None
+
     def _fetch(self, item: SourceItem, target: Path) -> None:
         """Bring the file to the local path `target`."""
         raise NotImplementedError

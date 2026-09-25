@@ -1,6 +1,8 @@
 """End-to-end pipeline tests: import, duplicates, groups, guessed locations."""
 from __future__ import annotations
 
+import os
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -8,7 +10,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ibackup import cli, pipeline
+from ibackup import cli, hashing, pipeline
 from ibackup.config import Config
 from ibackup.db import Database
 from ibackup.geocode import Geocoder
@@ -395,6 +397,96 @@ class KindFilterArgumentTests(unittest.TestCase):
     def test_a_filter_that_leaves_nothing_is_refused(self):
         with self.assertRaises(ValueError):
             self.resolve(exclude=["photo", "screenshot", "video", "sidecar"])
+
+
+class FingerprintCacheTests(PipelineTestCase):
+    def test_rerunning_the_same_folder_reads_nothing(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        self.photo("IMG_0002.jpg", datetime(2025, 1, 14, 18, 5), BARCELONA)
+        self.run_import()
+
+        with patch("ibackup.pipeline.partial_md5_from_reader",
+                   wraps=hashing.partial_md5_from_reader) as partial,              patch("ibackup.pipeline.file_md5", wraps=hashing.file_md5) as full:
+            stats, rows = self.run_import()
+
+        self.assertEqual(stats.duplicates, 2)
+        self.assertEqual(stats.imported, 0)
+        self.assertEqual(partial.call_count, 0)
+        self.assertEqual(full.call_count, 0)
+        self.assertEqual(len(rows), 2)
+
+    def test_a_changed_source_file_is_re_read(self):
+        path = self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        self.run_import()
+
+        synth.write_photo(path, datetime(2025, 1, 14, 18, 0), BARCELONA,
+                          payload=b"different content entirely" * 30)
+        os.utime(path, (time.time(), time.time()))
+
+        stats, rows = self.run_import()
+        self.assertEqual(stats.imported, 1)
+        self.assertEqual(len(rows), 2)
+
+    def test_no_cache_forces_a_re_read(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        self.run_import()
+
+        cfg = Config(dest=self.dest, use_source_cache=False, infer_enabled=False)
+        with patch("ibackup.pipeline.partial_md5_from_reader",
+                   wraps=hashing.partial_md5_from_reader) as partial:
+            stats, _ = self.run_import(cfg=cfg)
+        self.assertEqual(stats.duplicates, 1)
+        self.assertGreater(partial.call_count, 0)
+
+    def test_a_deleted_backup_file_is_copied_again(self):
+        """The cache records a decision, not a promise the file still exists."""
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        self.run_import()
+        with Database(self.cfg.db_path) as db:
+            db.conn.execute("DELETE FROM media")
+            db.conn.commit()
+
+        stats, rows = self.run_import()
+        self.assertEqual(stats.imported, 1)
+        self.assertEqual(len(rows), 1)
+
+
+class PartialCollisionTests(PipelineTestCase):
+    """Two different files can share a partial fingerprint; only content decides."""
+
+    HEAD = b"H" * 65536
+    TAIL = b"T" * 65536
+
+    def write_pair(self):
+        first = self.src / "IMG_20240101_100000.jpg"
+        second = self.src / "IMG_20240101_100001.jpg"
+        first.write_bytes(self.HEAD + b"A" * 70000 + self.TAIL)
+        second.write_bytes(self.HEAD + b"B" * 70000 + self.TAIL)
+        return first, second
+
+    def test_the_two_files_really_do_collide(self):
+        first, second = self.write_pair()
+        self.assertEqual(first.stat().st_size, second.stat().st_size)
+        self.assertEqual(hashing.partial_md5(first), hashing.partial_md5(second))
+        self.assertNotEqual(hashing.file_md5(first), hashing.file_md5(second))
+
+    def test_both_files_are_kept(self):
+        self.write_pair()
+        cfg = Config(dest=self.dest, infer_enabled=False)
+        stats, rows = self.run_import(cfg=cfg)
+
+        self.assertEqual(stats.imported, 2)
+        self.assertEqual(stats.duplicates, 0)
+        self.assertEqual(len(rows), 2)
+
+    def test_without_confirmation_the_collision_would_lose_a_file(self):
+        """Documents what confirm_with_full_md5 = false gives up."""
+        self.write_pair()
+        cfg = Config(dest=self.dest, confirm_with_full_md5=False,
+                     infer_enabled=False)
+        stats, _ = self.run_import(cfg=cfg)
+        self.assertEqual(stats.imported, 1)
+        self.assertEqual(stats.duplicates, 1)
 
 
 class VerifyAndReindexTests(PipelineTestCase):

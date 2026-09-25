@@ -47,6 +47,9 @@ class FolderSource(Source):
                     size=stat.st_size, mtime=stat.st_mtime, kind=self.kind,
                 )
 
+    def local_path(self, item: SourceItem) -> Path:
+        return Path(item.ref)
+
     def read_range(self, item: SourceItem, offset: int, length: int) -> bytes:
         with open(item.ref, "rb") as fh:
             fh.seek(offset)

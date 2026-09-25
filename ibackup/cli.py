@@ -32,6 +32,8 @@ def _config_from_args(args) -> Config:
         cfg.language = args.language
     if getattr(args, "radius_km", None):
         cfg.geo_radius_km = float(args.radius_km)
+    if getattr(args, "no_cache", False):
+        cfg.use_source_cache = False
     _apply_kind_filter(cfg, args)
     return cfg
 
@@ -297,6 +299,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="confirm duplicates with a full MD5 for the iPhone too")
     p.add_argument("--language", choices=["ro", "en"], help="month folder language")
     p.add_argument("--radius-km", type=float, help="how far away a city may be")
+    p.add_argument("--no-cache", action="store_true",
+                   help="re-read every source file instead of trusting the "
+                        "cached size+mtime fingerprint")
     _add_kind_filters(p)
     p.set_defaults(func=cmd_import)
 
@@ -339,7 +344,8 @@ def main(argv=None) -> int:
     for name, default in (("dry_run", False), ("limit", None), ("no_infer", False),
                           ("strict_dedup", False), ("deep", False),
                           ("language", None), ("radius_km", None),
-                          ("only", None), ("include", None), ("exclude", None)):
+                          ("only", None), ("include", None), ("exclude", None),
+                          ("no_cache", False)):
         if not hasattr(args, name):
             setattr(args, name, default)
     try:

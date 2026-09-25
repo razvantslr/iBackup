@@ -187,8 +187,24 @@ class Importer:
                       group_key: str | None, anchor: Anchor | None) -> Anchor | None:
         self.stats.scanned += 1
         chunk = self.cfg.partial_chunk
+        fp, decided = self._recall(item)
+        if decided is not None:
+            # We already decided about this exact file on an earlier run, so
+            # there is nothing to read: it is a duplicate of that row.
+            return self._on_duplicate(item, fp, decided)
 
-        if source.supports_random_read:
+        if fp is None and not source.supports_random_read:
+            # The only way to fingerprint this source is to fetch the file, so we
+            # hold on to it and reuse it for the metadata read and the copy.
+            with source.localize(item, self.cfg.staging_dir) as local:
+                size = local.path.stat().st_size
+                fp = Fingerprint(size, partial_md5(local.path, size, chunk))
+                matched = self._find_duplicate(item, fp, local.path, source)
+                if matched is not None:
+                    return self._on_duplicate(item, fp, matched)
+                return self._ingest(item, local, fp, group_key, anchor)
+
+        if fp is None:
             fp = Fingerprint(
                 size=item.size,
                 partial_md5=partial_md5_from_reader(
@@ -196,19 +212,33 @@ class Importer:
                     item.size, chunk,
                 ),
             )
-            matched = self._find_duplicate(item, fp, local_path=None, source=source)
-            if matched is not None:
-                return self._on_duplicate(item, fp, matched)
-            with source.localize(item, self.cfg.staging_dir) as local:
-                return self._ingest(item, local, fp, group_key, anchor)
 
+        matched = self._find_duplicate(item, fp, source.local_path(item), source)
+        if matched is not None:
+            return self._on_duplicate(item, fp, matched)
         with source.localize(item, self.cfg.staging_dir) as local:
-            size = local.path.stat().st_size
-            fp = Fingerprint(size=size, partial_md5=partial_md5(local.path, size, chunk))
-            matched = self._find_duplicate(item, fp, local_path=local.path, source=source)
-            if matched is not None:
-                return self._on_duplicate(item, fp, matched)
             return self._ingest(item, local, fp, group_key, anchor)
+
+    def _recall(self, item: SourceItem):
+        """(fingerprint, already-matched row) remembered from an earlier run."""
+        if not self.cfg.use_source_cache or item.mtime is None:
+            return None, None
+        row = self.db.cached_source(item.kind, item.ref, item.size, item.mtime)
+        if row is None:
+            return None, None
+        fp = Fingerprint(item.size, row["partial_md5"])
+        media_id = row["media_id"]
+        if media_id is None:
+            return fp, None
+        # The backup may have changed since; only trust a row still present.
+        return fp, self.db.media_by_id(int(media_id))
+
+    def _remember(self, item: SourceItem, fp: Fingerprint,
+                  media_id: int | None) -> None:
+        if not self.cfg.use_source_cache or self.dry_run or item.mtime is None:
+            return
+        self.db.cache_source(item.kind, item.ref, fp.size, item.mtime,
+                             fp.partial_md5, media_id)
 
     def _find_duplicate(self, item: SourceItem, fp: Fingerprint,
                         local_path: Path | None, source: Source):
@@ -257,6 +287,7 @@ class Importer:
         if not self.dry_run:
             self.db.record_duplicate(self.run_id, item, int(row["id"]),
                                      fp.size, fp.partial_md5)
+            self._remember(item, fp, int(row["id"]))
         return self._anchor_from_row(row)
 
     def _anchor_from_row(self, row) -> Anchor | None:
@@ -299,6 +330,7 @@ class Importer:
         if meta.kind not in self.allowed_kinds:
             self.stats.filtered += 1
             self.report.detail(f"filtered out ({meta.kind}): {item.name}")
+            self._remember(item, fp, None)
             return None
 
         if meta.taken_at is None and item.mtime:
@@ -344,7 +376,7 @@ class Importer:
             self.stats.imported += 1
             self.stats.bytes_copied += fp.size
             self.report.detail(f"copied: {item.name} -> {rel_final}")
-            self.db.insert_media(
+            media_id = self.db.insert_media(
                 size=fp.size, partial_md5=fp.partial_md5, full_md5=None,
                 rel_path=rel_final, filename=dest_abs.name, kind=meta.kind,
                 taken_at=taken_at.isoformat() if taken_at else None,
@@ -355,6 +387,7 @@ class Importer:
                 source_kind=item.kind, source_ref=item.ref,
                 source_name=item.name, imported_at=utc_now(), run_id=self.run_id,
             )
+            self._remember(item, fp, media_id)
 
         return Anchor(
             dest_dir=PurePosixPath(rel_final).parent,
