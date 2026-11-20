@@ -200,7 +200,10 @@ class Geocoder:
         self.cities = list(cities if cities is not None else BUILTIN_CITIES)
         self._grid: dict[tuple[int, int], list[int]] = {}
         for index, (_, _, lat, lon, _) in enumerate(self.cities):
-            self._grid.setdefault((math.floor(lat), math.floor(lon)), []).append(index)
+            ilon = math.floor(lon)
+            if ilon >= 180:
+                ilon -= 360
+            self._grid.setdefault((math.floor(lat), ilon), []).append(index)
         self._cache: dict[tuple[float, float], Place | None] = {}
 
     @classmethod
@@ -227,7 +230,7 @@ class Geocoder:
             for step in range(lon_span + 1):
                 ilon = lon_start + step
                 # Wrap longitude so the search also works across the 180th meridian.
-                if ilon > 180:
+                if ilon >= 180:
                     ilon -= 360
                 elif ilon < -180:
                     ilon += 360

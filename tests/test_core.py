@@ -126,6 +126,18 @@ class GeocodeTests(unittest.TestCase):
         self.assertEqual(source, "grid")
         self.assertEqual(name, "GPS_10.0N_10.0E")
 
+    def test_a_city_across_the_180th_meridian_is_found(self):
+        geo = geocode.Geocoder([("Taveuni", "FJ", -16.8, -179.9, 10000)],
+                               radius_km=25.0)
+        # 0.15 degrees of longitude, about 16 km at this latitude.
+        self.assertEqual(geo.place_name(-16.8, 179.95)[0], "Taveuni")
+
+    def test_a_city_on_the_180th_meridian_is_found(self):
+        geo = geocode.Geocoder([("Meridian", "FJ", -16.8, 180.0, 10000)],
+                               radius_km=25.0)
+        self.assertEqual(geo.place_name(-16.8, 179.95)[0], "Meridian")
+        self.assertEqual(geo.place_name(-16.8, -179.95)[0], "Meridian")
+
     def test_grid_label_hemispheres(self):
         self.assertEqual(geocode.grid_label(-33.9, -70.7), "GPS_33.9S_70.7W")
 

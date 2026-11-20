@@ -265,6 +265,16 @@ class ScreenshotTests(PipelineTestCase):
         shot = [r for r in rows if r["kind"] == "screenshot"][0]
         self.assertTrue(shot["rel_path"].startswith("Screenshots/"))
 
+    def test_the_source_folder_name_does_not_make_everything_a_screenshot(self):
+        source_dir = self.root / "Screenshots archive" / "2019"
+        synth.write_photo(source_dir / "IMG_0001.jpg",
+                          datetime(2025, 1, 14, 18, 0), BARCELONA)
+        _, rows = self.run_import(source_dir=source_dir)
+
+        self.assertEqual(rows[0]["kind"], "photo")
+        self.assertEqual(self.rel_paths(),
+                         ["2025/01_ianuarie/Barcelona/IMG_0001.jpg"])
+
     def test_screenshot_dir_can_be_turned_off(self):
         cfg = Config(dest=self.dest, screenshot_dir="", infer_enabled=False)
         synth.write_png(self.src / "Screenshot 2025-01-14.png")
@@ -696,6 +706,54 @@ class VerifyAndReindexTests(PipelineTestCase):
         stats, _ = self.run_import()
         self.assertEqual(stats.imported, 0)
         self.assertEqual(stats.duplicates, 2)
+
+    def reindex_from_scratch(self, cfg):
+        cfg.db_path.unlink()
+        for leftover in cfg.internal_dir.glob("index.db-*"):
+            leftover.unlink()
+        with Database(cfg.db_path) as db:
+            pipeline.reindex(cfg, db, Geocoder(CITIES), self.report)
+            return [dict(r) for r in db.all_media()]
+
+    def test_reindex_gives_a_screenshot_no_place(self):
+        synth.write_png(self.src / "Screenshot 2025-01-14 at 19.00.00.png")
+        self.run_import()
+        rows = self.reindex_from_scratch(self.cfg)
+        self.assertIsNone(rows[0]["place"])
+
+        cfg = Config(dest=self.dest, screenshot_dir="")
+        with Database(cfg.db_path) as db:
+            pipeline.reorganize(cfg, db, self.report)
+        self.assertEqual(self.rel_paths(), [
+            "2025/01_ianuarie/Fara_locatie/Screenshot_2025-01-14_at_19.00.00.png"])
+
+    def test_reindex_after_a_language_change_keeps_the_places(self):
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 30), BARCELONA)
+        self.run_import()
+        rows = self.reindex_from_scratch(Config(dest=self.dest, language="en"))
+        self.assertEqual(rows[0]["place"], "Barcelona")
+
+    def test_reindex_keeps_the_place_of_a_screenshot_filed_by_place(self):
+        cfg = Config(dest=self.dest, screenshot_dir="")
+        self.photo("IMG_0001.jpg", datetime(2025, 1, 14, 18, 0), BARCELONA)
+        synth.write_png(self.src / "Screenshot 2025-01-14 at 18.30.00.png")
+        self.run_import(cfg=cfg)
+        self.assertIn("2025/01_ianuarie/Barcelona/"
+                      "Screenshot_2025-01-14_at_18.30.00.png", self.rel_paths())
+
+        rows = self.reindex_from_scratch(cfg)
+        self.assertEqual({r["place"] for r in rows}, {"Barcelona"})
+
+    def test_reindex_reads_the_place_above_the_video_folder(self):
+        cfg = Config(dest=self.dest, video_subdir="Video")
+        (self.src / "IMG_0005.MOV").write_bytes(
+            synth.build_mov("2025-01-14T18:05:00+0100", "+41.3901+002.1701/"))
+        self.run_import(cfg=cfg)
+        self.assertEqual(self.rel_paths(),
+                         ["2025/01_ianuarie/Barcelona/Video/IMG_0005.MOV"])
+
+        rows = self.reindex_from_scratch(cfg)
+        self.assertEqual(rows[0]["place"], "Barcelona")
 
 
 class SourceSelectionTests(PipelineTestCase):

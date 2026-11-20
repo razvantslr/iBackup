@@ -268,6 +268,7 @@ def cmd_geonames(args) -> int:
         return 2
 
     path = Path(source_file)
+    created = [temp_zip] if temp_zip else []
     if path.suffix.lower() == ".zip":
         with zipfile.ZipFile(path) as zf:
             names = [n for n in zf.namelist() if n.lower().endswith(".txt")]
@@ -278,6 +279,7 @@ def cmd_geonames(args) -> int:
             with zf.open(names[0]) as src, extracted.open("wb") as dst:
                 dst.write(src.read())
         path = extracted
+        created.append(extracted)
 
     cities = load_geonames(path)
     if not cities:
@@ -286,12 +288,11 @@ def cmd_geonames(args) -> int:
     with target.open("w", encoding="utf-8") as fh:
         for name, country, lat, lon, population in cities:
             fh.write(f"{name}\t{country}\t{lat}\t{lon}\t{population}\n")
-    for leftover in (temp_zip, path if path != target else None):
-        if leftover and Path(leftover).exists() and Path(leftover) != target:
-            try:
-                Path(leftover).unlink()
-            except OSError:
-                pass
+    for leftover in created:
+        try:
+            leftover.unlink(missing_ok=True)
+        except OSError:
+            pass
     print(f"Done: {len(cities)} places in {target}")
     return 0
 

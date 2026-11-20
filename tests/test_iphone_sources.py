@@ -7,6 +7,7 @@ shell behave as assumed; that still needs a phone.
 """
 from __future__ import annotations
 
+import os
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -217,6 +218,30 @@ class AfcImportTests(PhoneTestCase):
         groups = {r["group_key"] for r in rows if r["group_key"]}
         self.assertEqual(len(groups), 1)
         self.assertTrue(all(r["source_kind"] == "afc" for r in rows))
+
+    def test_a_photo_without_exif_keeps_the_phone_date(self):
+        dcim = self.phone / "DCIM" / "100APPLE"
+        photo = synth.write_photo(dcim / "IMG_0003.JPG", payload=b"three" * 300)
+        stamp = datetime(2019, 7, 12, 12, 0).timestamp()
+        os.utime(photo, (stamp, stamp))
+        source, _ = self.make_source()
+        self.import_from(source)
+
+        self.assertEqual(self.rel_paths(),
+                         ["2019/07_iulie/Fara_locatie/IMG_0003.JPG"])
+
+    def test_a_backup_under_a_screenshot_folder_does_not_flag_phone_photos(self):
+        self.dest = self.root / "Screenshot Backup" / "Photos"
+        self.cfg = Config(dest=self.dest, infer_enabled=False)
+        dcim = self.phone / "DCIM" / "100APPLE"
+        synth.write_photo(dcim / "IMG_0001.JPG", datetime(2025, 1, 14, 18, 0),
+                          BARCELONA, payload=b"one" * 300)
+        source, _ = self.make_source()
+        _, rows = self.import_from(source)
+
+        self.assertEqual(rows[0]["kind"], "photo")
+        self.assertEqual(self.rel_paths(),
+                         ["2025/01_ianuarie/Barcelona/IMG_0001.JPG"])
 
     def test_staging_is_emptied_and_files_are_moved_not_copied(self):
         self.populate_phone()
