@@ -154,7 +154,7 @@ class VerifyBackupTests(unittest.TestCase):
         self.assertEqual(before, (snapshot(self.backup), snapshot(self.source)))
         text = next(p for p in self.out_dir.glob("verify-source-*.log")).read_text(encoding="utf-8")
         self.assertIn("files hashed: 3 of 3", text)
-        self.assertIn("present in the backup: 1", text)
+        self.assertIn("present in the backup (a file with the same content is in it): 1", text)
         self.assertIn("MISSING from the backup: 2", text)
         self.assertIn("missing.webp", text)
         self.assertIn("missing.aae", text)
@@ -170,7 +170,18 @@ class VerifyBackupTests(unittest.TestCase):
         tsv = next(self.out_dir.glob("*.tsv"))
         self.run_main(["source", str(self.backup), str(self.source), "--hashes", str(tsv)])
         text = next(p for p in self.out_dir.glob("verify-source-*.log")).read_text(encoding="utf-8")
-        self.assertIn("via TSV only: 1", text)
+        self.assertIn("present in the backup (a file with the same content is in it): 2", text)
+
+    def test_a_file_known_only_to_the_old_index_is_missing(self):
+        # Like a HEIC the old tool converted to JPG: the index has its hash, the backup has not.
+        write(self.source / "IMG_0001.HEIC", self.orig_bad)
+        self.run_main(["backup", str(self.backup)])
+        tsv = next(self.out_dir.glob("*.tsv"))
+        self.run_main(["source", str(self.backup), str(self.source), "--hashes", str(tsv)])
+        text = next(p for p in self.out_dir.glob("verify-source-*.log")).read_text(encoding="utf-8")
+        self.assertIn("MISSING from the backup: 3", text)
+        self.assertIn("(e.g. HEIC converted to JPG): 1", text)
+        self.assertIn("IMG_0001.HEIC  [old index only]", text)
 
     def test_refuses_output_inside_inspected_folder(self):
         buf = io.StringIO()

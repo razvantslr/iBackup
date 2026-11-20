@@ -593,9 +593,14 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
     results: dict[str, list] = {s: [] for s in sources}
     present_set = index_hashes | tsv_hashes
 
+    # The old index also lists files the old tool converted (HEIC -> JPG), so a
+    # hash known only to the index is not proof that the file is in the backup.
+    # With a TSV of the backup's real files, only the TSV counts as present.
     def sink(entry: Entry, digest: str) -> None:
-        via = ("index" if digest in index_hashes else "tsv" if digest in tsv_hashes else None)
-        results[owner[id(entry)]].append({"rel": entry.rel, "size": entry.size, "via": via})
+        via = ("tsv" if digest in tsv_hashes else "index" if digest in index_hashes else None)
+        present = via == "tsv" or (via == "index" and not args.hashes)
+        results[owner[id(entry)]].append(
+            {"rel": entry.rel, "size": entry.size, "via": via, "present": present})
 
     interrupted = run_hashing(all_entries, detector, progress, sink, errors)
     how = "forced by --algo / TSV header" if forced else (
@@ -613,18 +618,24 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
     algo_section(out, 2, detector, blake3_ok, how)
     for n, (src, _es) in enumerate(per_source, 3):
         rs = results[src]
-        present = [r for r in rs if r["via"]]
-        missing = [r for r in rs if not r["via"]]
+        present = [r for r in rs if r["present"]]
+        missing = [r for r in rs if not r["present"]]
+        index_only = [r for r in missing if r["via"] == "index"]
         section(out, n, f"SOURCE {src}")
         out.append(f"files hashed: {len(rs)} of {len(_es)}   size: {human_size(sum(r['size'] for r in rs))}")
-        out.append(f"present in the backup: {len(present)}   "
-                   f"(via index: {sum(1 for r in present if r['via'] == 'index')}, "
-                   f"via TSV only: {sum(1 for r in present if r['via'] == 'tsv')})")
+        if args.hashes:
+            out.append(f"present in the backup (a file with the same content is in it): {len(present)}")
+        else:
+            out.append(f"present according to the old index (no TSV given, files not checked): {len(present)}")
         out.append(f"MISSING from the backup: {len(missing)}   ({human_size(sum(r['size'] for r in missing))})")
+        if args.hashes:
+            out.append(f"  of which known to the old index but not in the backup as such "
+                       f"(e.g. HEIC converted to JPG): {len(index_only)}   "
+                       f"({human_size(sum(r['size'] for r in index_only))})")
         exts: dict = {}
         for r in rs:
             e = exts.setdefault(ext_of(r["rel"]), [0, 0])
-            e[0 if r["via"] else 1] += 1
+            e[0 if r["present"] else 1] += 1
         out.append("")
         out.append("per extension (kind per ibackup.mediameta; * = skipped by the old tool, expected missing):")
         out.append(f"  {'ext':<12} {'present':>8} {'missing':>8}  kind")
@@ -639,7 +650,8 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
         for ext, rows in sorted(by_ext.items(), key=lambda kv: (-len(kv[1]), kv[0])):
             out.append(f"  [{ext}] {len(rows)} files, {human_size(sum(r['size'] for r in rows))}")
             for r in sorted(rows, key=lambda r: r["rel"].lower()):
-                out.append(f"    {r['size']:>14}  {plain(r['rel'])}")
+                mark = "  [old index only]" if r["via"] == "index" else ""
+                out.append(f"    {r['size']:>14}  {plain(r['rel'])}{mark}")
     n = 3 + len(per_source)
     errors_section(out, n, walk_errors + errors)
     section(out, n + 1, "TIMING")
@@ -649,7 +661,7 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
     log_path = out_dir / f"{stem}{'-PARTIAL' if interrupted else ''}.log"
     write_text(log_path, out)
     say(str(log_path))
-    miss = sum(1 for rs in results.values() for r in rs if not r["via"])
+    miss = sum(1 for rs in results.values() for r in rs if not r["present"])
     say(f"{sum(len(rs) for rs in results.values())} hashed, {miss} missing from the backup, "
         f"{len(errors) + len(walk_errors)} errors")
     return 130 if interrupted else 0
