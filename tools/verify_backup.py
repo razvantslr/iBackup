@@ -764,6 +764,9 @@ def main(argv=None, out_dir=None) -> int:
 
     root = os.path.abspath(args.backup)
     sources = [os.path.abspath(s) for s in getattr(args, "sources", [])]
+    if getattr(args, "hashes", None):
+        # fs_path's \\?\ prefix only works on absolute paths.
+        args.hashes = os.path.abspath(args.hashes)
     for folder in [root] + sources:
         if not os.path.isdir(fs_path(folder)):
             print(f"not a folder: {folder}", file=sys.stderr)

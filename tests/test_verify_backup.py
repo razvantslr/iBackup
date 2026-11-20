@@ -258,6 +258,21 @@ class VerifyBackupTests(unittest.TestCase):
                       "backed up, see the errors section): 1",
                       self.source_log())
 
+    def test_a_relative_tsv_path_works(self):
+        self.source_with(["#algo=sha256", "relpath\tsize\tmtime\thash\tmatched", self.good_row()])
+        for f in self.out_dir.glob("verify-source-*"):
+            f.unlink()
+        cwd = os.getcwd()
+        os.chdir(self.out_dir)
+        try:
+            code, console = self.run_main(["source", str(self.backup), str(self.source),
+                                           "--hashes", "given.tsv"])
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(code, 0, console)
+        self.assertIn("present in the backup (a file with the same content is in it): 1",
+                      self.source_log())
+
     def test_an_older_tsv_is_used_with_a_warning(self):
         code, console = self.source_with(["#algo=sha256", "relpath\tsize\tmtime\thash\tmatched",
                                           self.good_row()])
