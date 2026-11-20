@@ -11,7 +11,8 @@ Mode 1, hash every file in the backup and compare with the index:
     python tools/verify_backup.py backup D:\\poze\\backup_final
 
 Mode 2, say whether the content of every file in some source folders exists
-in the backup (by the index, and by the TSV that mode 1 wrote):
+in the backup. Present means the TSV that mode 1 wrote for this backup has a
+file with the same hash; the old index only labels what is missing:
 
     python tools/verify_backup.py source D:\\poze\\backup_final "D:\\POZE\\_backup23" --hashes <tsv>
 
@@ -164,7 +165,8 @@ class Progress:
 class Detector:
     """Picks the hash algorithm: all candidates until one is clearly right."""
 
-    def __init__(self, candidates: list[str], known: set, forced: str | None):
+    def __init__(self, candidates: list[str], known: set, forced: str | None,
+                 early_verdict: bool = True):
         self.candidates = candidates
         self.known = known
         self.matches = {c: 0 for c in candidates}
@@ -172,7 +174,7 @@ class Detector:
         self.winner = forced or (candidates[0] if len(candidates) == 1 else None)
         self.detected = self.winner is None
         self._early = [0, 0]      # files checked, matches: for the early console verdict
-        self._told = False
+        self._told = not early_verdict
 
     def algos(self) -> list[str]:
         return [self.winner] if self.winner else self.candidates
@@ -302,20 +304,52 @@ def load_index(root: str) -> Index:
     return idx
 
 
-def load_tsv(path: str) -> tuple[str | None, set]:
-    algo, hashes = None, set()
-    with open(fs_path(path), "r", encoding="utf-8", errors="replace") as fh:
+def load_tsv(path: str) -> tuple[dict, list]:
+    """The TSV's #key=value header lines (algo, backup, complete) and its
+    (relative path, size, mtime, hash) rows."""
+    meta, rows, in_header = {}, [], True
+    with open(fs_path(path), "r", encoding="utf-8-sig", errors="replace") as fh:
         for line in fh:
             line = line.rstrip("\r\n")
-            if line.startswith("#algo="):
-                algo = line[6:].strip()
-            elif line.startswith("#") or line.startswith("relpath\t"):
+            if in_header:
+                if line.startswith("relpath\t"):
+                    in_header = False
+                elif line.startswith("#") and "=" in line:
+                    key, value = line[1:].split("=", 1)
+                    meta[key.strip()] = value.strip()
                 continue
-            else:
-                cols = line.split("\t")
-                if len(cols) >= 4 and cols[3]:
-                    hashes.add(cols[3].lower())
-    return algo, hashes
+            cols = line.split("\t")
+            if len(cols) >= 4 and cols[3] and cols[1].isdigit():
+                try:
+                    mtime = float(cols[2])
+                except ValueError:
+                    continue
+                rows.append((cols[0], int(cols[1]), mtime, cols[3].lower()))
+    return meta, rows
+
+
+def confirm_tsv_rows(root: str, rows: list) -> tuple[set, list]:
+    """Hashes of TSV rows whose file is still in the backup, same size and mtime.
+
+    Rows that no longer match (deleted, rewritten, or a TSV of another backup)
+    are dropped, so they can never make a source file look present.
+    """
+    hashes, dropped = set(), []
+    for rel, size, mtime, digest in rows:
+        try:
+            st = os.stat(fs_path(os.path.join(root, rel)))
+            ok = st.st_size == size and abs(st.st_mtime - mtime) < 2.0
+        except OSError:
+            ok = False
+        if ok:
+            hashes.add(digest)
+        else:
+            dropped.append(rel)
+    return hashes, dropped
+
+
+def same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
 # ------------------------------------------------------------------ report
@@ -516,7 +550,10 @@ def run_backup(args, root: str, out_dir: Path, blake3_ok: bool) -> int:
     write_text(log_path, lines)
 
     index_hashes = set(idx.by_hash)
-    tsv = [f"#algo={detector.winner}", "relpath\tsize\tmtime\thash\tmatched"]
+    tsv_path = tsv_path.with_name(f"{stem}{suffix}.tsv")
+    tsv = [f"#algo={detector.winner}", f"#backup={root}",
+           f"#complete={'no' if interrupted else 'yes'}",
+           "relpath\tsize\tmtime\thash\tmatched"]
     for r in results:
         tsv.append("\t".join((tsv_field(plain(r["rel"])), str(r["size"]), f"{r['mtime']:.6f}",
                               r["hash"], "yes" if r["hash"] in index_hashes else "no")))
@@ -544,23 +581,46 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
     try:
         idx = load_index(root)
     except (RuntimeError, OSError) as exc:
-        if not args.hashes:
-            say(f"cannot read the index: {exc}")
-            return 2
         say(f"WARNING: no usable index ({exc}); using only the TSV")
     index_hashes = set(idx.by_hash) if idx else set()
-    tsv_hashes: set = set()
-    if args.hashes:
-        try:
-            tsv_algo, tsv_hashes = load_tsv(args.hashes)
-        except OSError as exc:
-            say(f"cannot read {args.hashes}: {exc}")
+    try:
+        tsv_meta, tsv_rows = load_tsv(args.hashes)
+        tsv_time = fmt_time(os.stat(fs_path(args.hashes)).st_mtime)
+    except OSError as exc:
+        say(f"cannot read {args.hashes}: {exc}")
+        return 2
+    if not tsv_rows:
+        say(f"refusing: {args.hashes} has no hash rows; pass the .tsv written by the backup mode")
+        return 2
+    if tsv_meta.get("complete") == "no":
+        say(f"refusing: {args.hashes} comes from an interrupted backup run; "
+            f"run the backup mode to the end first")
+        return 2
+    say(f"checking that the {len(tsv_rows)} files in the TSV are still in the backup ...")
+    tsv_hashes, tsv_dropped = confirm_tsv_rows(root, tsv_rows)
+    if len(tsv_hashes) == 0 or len(tsv_dropped) > len(tsv_rows) // 2:
+        say(f"refusing: only {len(tsv_rows) - len(tsv_dropped)} of {len(tsv_rows)} files in "
+            f"{args.hashes} are in {root} with the same size and time; it does not describe this backup")
+        return 2
+    tsv_notes = []
+    if "backup" in tsv_meta and not same_path(tsv_meta["backup"], root):
+        tsv_notes.append(f"NOTE: the TSV was made for {tsv_meta['backup']} (e.g. another drive "
+                         f"letter); its files were found under {root}.")
+    if "backup" not in tsv_meta or "complete" not in tsv_meta:
+        tsv_notes.append("WARNING: this TSV was made by an earlier version of the script, which "
+                         "did not record its backup folder or whether the run finished; only "
+                         "its rows whose file is still in the backup with the same size and time are used.")
+    if tsv_dropped:
+        tsv_notes.append(f"WARNING: {len(tsv_dropped)} TSV rows no longer match a file in the "
+                         f"backup (deleted or changed since) and are not used.")
+    for note in tsv_notes:
+        say(note)
+    tsv_algo = tsv_meta.get("algo")
+    if tsv_algo:
+        if forced and forced != tsv_algo:
+            say(f"--algo {forced} contradicts the TSV header (#algo={tsv_algo})")
             return 2
-        if tsv_algo:
-            if forced and forced != tsv_algo:
-                say(f"--algo {forced} contradicts the TSV header (#algo={tsv_algo})")
-                return 2
-            forced = tsv_algo
+        forced = tsv_algo
     if forced == "blake3" and not blake3_ok:
         log = out_dir / f"{stem}.log"
         lines: list[str] = []
@@ -579,14 +639,18 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
 
     walk_errors: list = []
     per_source = []
+    unlisted: dict[str, int] = {}
     for src in sources:
         say(f"counting {src} ...")
+        before = len(walk_errors)
         per_source.append((src, scan_files(src, False, walk_errors)))
+        unlisted[src] = len(walk_errors) - before
     all_entries = [e for _s, es in per_source for e in es]
     total = sum(e.size for e in all_entries)
     say(f"{len(all_entries)} files, {human_size(total)} in {len(sources)} source folder(s). Hashing...")
 
-    detector = Detector(candidates, index_hashes | tsv_hashes, forced)
+    # Missing files are expected in a source, so no "nothing matched" verdict here.
+    detector = Detector(candidates, index_hashes | tsv_hashes, forced, early_verdict=False)
     progress = Progress(len(all_entries), total)
     errors: list = []
     owner: dict[int, str] = {id(e): s for s, es in per_source for e in es}
@@ -595,10 +659,10 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
 
     # The old index also lists files the old tool converted (HEIC -> JPG), so a
     # hash known only to the index is not proof that the file is in the backup.
-    # With a TSV of the backup's real files, only the TSV counts as present.
+    # Only the TSV of the backup's real files counts as present.
     def sink(entry: Entry, digest: str) -> None:
         via = ("tsv" if digest in tsv_hashes else "index" if digest in index_hashes else None)
-        present = via == "tsv" or (via == "index" and not args.hashes)
+        present = via == "tsv"
         results[owner[id(entry)]].append(
             {"rel": entry.rel, "size": entry.size, "via": via, "present": present})
 
@@ -613,7 +677,16 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
     header(out, "source", started, partial)
     out.append(f"backup:  {root}")
     out.append(f"index:   {idx.path + f'  ({idx.rows} rows, {len(index_hashes)} distinct hashes)' if idx else '(not used)'}")
-    out.append(f"tsv:     {args.hashes or '(none)'}" + (f"  ({len(tsv_hashes)} distinct hashes)" if args.hashes else ""))
+    out.append(f"tsv:     {args.hashes}  (file written {tsv_time}, "
+               f"made for {tsv_meta.get('backup', '(not recorded)')}, "
+               f"complete: {tsv_meta.get('complete', '(not recorded)')})")
+    out.append(f"         {len(tsv_rows)} rows; {len(tsv_rows) - len(tsv_dropped)} still in the backup "
+               f"with the same size and time, and used ({len(tsv_hashes)} distinct hashes)")
+    out.extend(tsv_notes)
+    for rel in tsv_dropped[:50]:
+        out.append(f"           not used: {rel}")
+    if len(tsv_dropped) > 50:
+        out.append(f"           ... and {len(tsv_dropped) - 50} more")
     out.append("sources: " + "; ".join(sources))
     algo_section(out, 2, detector, blake3_ok, how)
     for n, (src, _es) in enumerate(per_source, 3):
@@ -623,15 +696,16 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
         index_only = [r for r in missing if r["via"] == "index"]
         section(out, n, f"SOURCE {src}")
         out.append(f"files hashed: {len(rs)} of {len(_es)}   size: {human_size(sum(r['size'] for r in rs))}")
-        if args.hashes:
-            out.append(f"present in the backup (a file with the same content is in it): {len(present)}")
-        else:
-            out.append(f"present according to the old index (no TSV given, files not checked): {len(present)}")
+        not_checked = len(_es) - len(rs) + unlisted[src]
+        if not_checked:
+            out.append(f"NOT CHECKED (unreadable files or folders, or interrupted; treat as NOT "
+                       f"backed up, see the errors section): {not_checked}")
+        out.append(f"present in the backup (a file with the same content is in it): {len(present)}"
+                   f"   ({human_size(sum(r['size'] for r in present))}, the space these copies take here)")
         out.append(f"MISSING from the backup: {len(missing)}   ({human_size(sum(r['size'] for r in missing))})")
-        if args.hashes:
-            out.append(f"  of which known to the old index but not in the backup as such "
-                       f"(e.g. HEIC converted to JPG): {len(index_only)}   "
-                       f"({human_size(sum(r['size'] for r in index_only))})")
+        out.append(f"  of which known to the old index, but no file with that content is in the "
+                   f"backup (a HEIC the old tool converted to JPG, or a copy changed or deleted "
+                   f"later): {len(index_only)}   ({human_size(sum(r['size'] for r in index_only))})")
         exts: dict = {}
         for r in rs:
             e = exts.setdefault(ext_of(r["rel"]), [0, 0])
@@ -662,7 +736,9 @@ def run_source(args, root: str, sources: list[str], out_dir: Path, blake3_ok: bo
     write_text(log_path, out)
     say(str(log_path))
     miss = sum(1 for rs in results.values() for r in rs if not r["present"])
-    say(f"{sum(len(rs) for rs in results.values())} hashed, {miss} missing from the backup, "
+    hashed = sum(len(rs) for rs in results.values())
+    say(f"{hashed} hashed, {miss} missing from the backup, "
+        f"{len(all_entries) - hashed + sum(unlisted.values())} files or folders not checked (count them as missing), "
         f"{len(errors) + len(walk_errors)} errors")
     return 130 if interrupted else 0
 
@@ -681,7 +757,7 @@ def main(argv=None, out_dir=None) -> int:
     p2 = sub.add_parser("source", help="check that source folders' content exists in the backup")
     p2.add_argument("backup")
     p2.add_argument("sources", nargs="+")
-    p2.add_argument("--hashes", help="TSV written by mode 1")
+    p2.add_argument("--hashes", required=True, help="TSV written by mode 1 for this backup")
     for p in (p1, p2):
         p.add_argument("--algo", choices=("auto",) + ALGOS, default="auto")
     args = parser.parse_args(argv)
@@ -696,6 +772,13 @@ def main(argv=None, out_dir=None) -> int:
     for folder in [root] + sources:
         if inside(out_path, Path(folder).resolve()):
             print(f"refusing to write reports inside the inspected folder: {out_path}", file=sys.stderr)
+            return 2
+    backup_path = Path(root).resolve()
+    for src in sources:
+        src_path = Path(src).resolve()
+        if inside(src_path, backup_path) or inside(backup_path, src_path):
+            print(f"refusing: the source {src} overlaps the backup {root}; its files would "
+                  f"match themselves and look backed up", file=sys.stderr)
             return 2
 
     blake3_ok = blake3_available()

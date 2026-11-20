@@ -7,7 +7,7 @@ import io
 import os
 import sqlite3
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -124,8 +124,8 @@ class VerifyBackupTests(unittest.TestCase):
 
         tsv = self.report(".tsv").splitlines()
         self.assertEqual(tsv[0], "#algo=sha256")
-        self.assertEqual(tsv[1], "relpath\tsize\tmtime\thash\tmatched")
-        rows = {r.split("\t")[0]: r.split("\t") for r in tsv[2:]}
+        self.assertEqual(tsv[3], "relpath\tsize\tmtime\thash\tmatched")
+        rows = {r.split("\t")[0]: r.split("\t") for r in tsv[4:]}
         self.assertEqual(len(rows), 6)
         self.assertEqual(rows[os.path.join("2019", "07_July", "good.jpg")][4], "yes")
         self.assertEqual(rows[os.path.join("2019", "07_July", "bad.jpg")][4], "no")
@@ -180,8 +180,143 @@ class VerifyBackupTests(unittest.TestCase):
         self.run_main(["source", str(self.backup), str(self.source), "--hashes", str(tsv)])
         text = next(p for p in self.out_dir.glob("verify-source-*.log")).read_text(encoding="utf-8")
         self.assertIn("MISSING from the backup: 3", text)
-        self.assertIn("(e.g. HEIC converted to JPG): 1", text)
+        self.assertIn("changed or deleted later): 1", text)
         self.assertIn("IMG_0001.HEIC  [old index only]", text)
+
+    def source_with(self, tsv_lines):
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        tsv = self.out_dir / "given.tsv"
+        tsv.write_text("\n".join(tsv_lines) + "\n", encoding="utf-8")
+        return self.run_main(["source", str(self.backup), str(self.source), "--hashes", str(tsv)])
+
+    def test_source_mode_needs_a_tsv(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            verify_backup.main(["source", str(self.backup), str(self.source)], out_dir=self.out_dir)
+        self.assertEqual(ctx.exception.code, 2)
+
+    def good_row(self, mtime=1_500_000_000):
+        return (f"{os.path.join('2019', '07_July', 'good.jpg')}\t{len(self.good)}\t{mtime}\t"
+                f"{sha(self.good)}\tyes")
+
+    def source_log(self):
+        return next(p for p in self.out_dir.glob("verify-source-*.log")).read_text(encoding="utf-8")
+
+    def test_a_tsv_from_an_interrupted_run_is_refused(self):
+        code, console = self.source_with(["#algo=sha256", f"#backup={self.backup}", "#complete=no",
+                                          "relpath\tsize\tmtime\thash\tmatched", self.good_row()])
+        self.assertEqual(code, 2)
+        self.assertIn("interrupted", console)
+
+    def test_a_tsv_without_rows_is_refused(self):
+        code, console = self.source_with(["#algo=sha256", "relpath\tsize\tmtime\thash\tmatched"])
+        self.assertEqual(code, 2)
+        self.assertIn("no hash rows", console)
+
+    def test_a_tsv_whose_files_are_not_in_this_backup_is_refused(self):
+        code, console = self.source_with([
+            "#algo=sha256", "relpath\tsize\tmtime\thash\tmatched",
+            f"elsewhere\\present.jpg\t{len(self.good)}\t0\t{sha(self.good)}\tyes"])
+        self.assertEqual(code, 2)
+        self.assertIn("does not describe this backup", console)
+
+    def test_a_tsv_made_under_another_drive_letter_is_used_with_a_note(self):
+        code, console = self.source_with(["#algo=sha256", "#backup=E:\\POZE\\BACKUP_FINAL",
+                                          "#complete=yes", "relpath\tsize\tmtime\thash\tmatched",
+                                          self.good_row()])
+        self.assertEqual(code, 0, console)
+        self.assertIn("was made for E:\\POZE\\BACKUP_FINAL", self.source_log())
+        self.assertIn("present in the backup (a file with the same content is in it): 1",
+                      self.source_log())
+
+    def test_a_row_whose_file_left_the_backup_is_not_used(self):
+        removed = b"was in the backup when the TSV was made"
+        write(self.source / "later_deleted.jpg", removed)
+        code, console = self.source_with([
+            "#algo=sha256", f"#backup={self.backup}", "#complete=yes",
+            "relpath\tsize\tmtime\thash\tmatched", self.good_row(),
+            f"2020\\gone.jpg\t{len(removed)}\t0\t{sha(removed)}\tno"])
+        self.assertEqual(code, 0, console)
+        text = self.source_log()
+        self.assertIn("1 TSV rows no longer match", text)
+        self.assertIn("later_deleted.jpg", text.split("missing files by extension")[1])
+
+    def test_unreadable_source_files_are_counted_as_not_checked(self):
+        real = verify_backup.hash_file
+
+        def flaky(path, algos, progress):
+            if path.endswith("present.jpg"):
+                raise OSError("device busy")
+            return real(path, algos, progress)
+
+        with mock.patch.object(verify_backup, "hash_file", flaky):
+            code, console = self.source_with(["#algo=sha256", f"#backup={self.backup}",
+                                              "#complete=yes", "relpath\tsize\tmtime\thash\tmatched",
+                                              self.good_row()])
+        self.assertEqual(code, 0, console)
+        self.assertIn("1 files or folders not checked (count them as missing)", console)
+        self.assertIn("NOT CHECKED (unreadable files or folders, or interrupted; treat as NOT "
+                      "backed up, see the errors section): 1",
+                      self.source_log())
+
+    def test_an_older_tsv_is_used_with_a_warning(self):
+        code, console = self.source_with(["#algo=sha256", "relpath\tsize\tmtime\thash\tmatched",
+                                          self.good_row()])
+        self.assertEqual(code, 0, console)
+        self.assertIn("earlier version", console)
+        text = self.source_log()
+        self.assertIn("earlier version", text)
+        self.assertIn("present in the backup (a file with the same content is in it): 1", text)
+
+    def test_a_hash_like_file_name_is_not_read_as_a_header(self):
+        code, console = self.source_with(["#algo=sha256", "relpath\tsize\tmtime\thash\tmatched",
+                                          self.good_row(), "#algo=bogus\t1\t0\tff\tno"])
+        self.assertEqual(code, 0, console)
+        self.assertIn("used: sha256", self.source_log())
+        self.assertIn("1 TSV rows no longer match", self.source_log())
+
+    def test_a_row_whose_file_was_rewritten_is_not_used(self):
+        code, console = self.source_with(["#algo=sha256", "relpath\tsize\tmtime\thash\tmatched",
+                                          self.good_row(), self.good_row(mtime=1_400_000_000)])
+        self.assertEqual(code, 0, console)
+        self.assertIn("1 TSV rows no longer match", self.source_log())
+
+    def test_more_than_half_the_rows_missing_is_refused(self):
+        stale = [f"old\\f{n}.jpg\t10\t0\t{n:064x}\tno" for n in range(2)]
+        code, console = self.source_with(["#algo=sha256", "relpath\tsize\tmtime\thash\tmatched",
+                                          self.good_row(), *stale])
+        self.assertEqual(code, 2)
+        self.assertIn("only 1 of 3 files", console)
+
+    def test_a_source_that_overlaps_the_backup_is_refused(self):
+        elsewhere = TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        for source in (self.backup.parent, self.backup / "2019"):
+            with self.subTest(source=source):
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    code = verify_backup.main(["source", str(self.backup), str(source),
+                                               "--hashes", "x.tsv"], out_dir=elsewhere.name)
+                self.assertEqual(code, 2)
+                self.assertIn("overlaps the backup", err.getvalue())
+
+    def test_an_unlistable_source_folder_counts_as_not_checked(self):
+        real_walk = os.walk
+
+        def walk_with_a_locked_folder(top, onerror=None, **kwargs):
+            onerror(PermissionError(13, "Access is denied", os.path.join(top, "locked")))
+            yield from real_walk(top, onerror=onerror, **kwargs)
+
+        with mock.patch.object(verify_backup.os, "walk", walk_with_a_locked_folder):
+            code, console = self.source_with(["#algo=sha256", "relpath\tsize\tmtime\thash\tmatched",
+                                              self.good_row()])
+        self.assertEqual(code, 0, console)
+        self.assertIn("1 files or folders not checked (count them as missing)", console)
+        self.assertIn("NOT CHECKED (unreadable files or folders", self.source_log())
+
+    def test_backup_mode_records_its_folder_and_completion_in_the_tsv(self):
+        self.run_main(["backup", str(self.backup)])
+        head = next(self.out_dir.glob("*.tsv")).read_text(encoding="utf-8").splitlines()[:3]
+        self.assertEqual(head, ["#algo=sha256", f"#backup={self.backup}", "#complete=yes"])
 
     def test_refuses_output_inside_inspected_folder(self):
         buf = io.StringIO()
