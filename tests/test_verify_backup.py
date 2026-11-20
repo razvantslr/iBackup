@@ -1,0 +1,238 @@
+"""tools/verify_backup.py: hash comparison with a foreign index, and read-only behaviour."""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import io
+import os
+import sqlite3
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import mock
+
+SCRIPT = Path(__file__).resolve().parent.parent / "tools" / "verify_backup.py"
+spec = importlib.util.spec_from_file_location("verify_backup", SCRIPT)
+verify_backup = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(verify_backup)
+
+HAVE_BLAKE3 = verify_backup.blake3_available()
+
+
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def b3(data: bytes) -> str:
+    import blake3
+    return blake3.blake3(data).hexdigest()
+
+
+def snapshot(root: Path) -> dict:
+    snap = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            p = Path(dirpath) / name
+            st = p.stat()
+            snap[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns, p.read_bytes())
+    return snap
+
+
+def write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+class VerifyBackupTests(unittest.TestCase):
+    hash_fn = staticmethod(sha)
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.backup = base / "backup \u03b5\u03bb"
+        self.source = base / "source"
+        self.out_dir = base / "out"
+        h = self.hash_fn
+        b = self.backup
+        self.good = b"good photo content" * 50
+        self.orig_bad = b"original content of bad"
+        self.dup = b"identical bytes"
+        write(b / "2019" / "07_July" / "good.jpg", self.good)
+        write(b / "2019" / "07_July" / "bad.jpg", b"CORRUPTED content of bad")
+        write(b / "2019" / "07_July" / "extra.jpg", b"not in the index")
+        write(b / "2019" / "07_July" / "\u03a0\u03b1\u03c4\u03c1\u03b1" / "zero.jpg", b"")
+        write(b / "2020" / "01_January" / "dup1.jpg", self.dup)
+        write(b / "2020" / "01_January" / "dup2.jpg", self.dup)
+        write(b / ".ibackup" / "ignored.txt", b"meta file, must be skipped")
+        con = sqlite3.connect(b / ".ibackup" / "index.db")
+        con.execute("CREATE TABLE media_index(path TEXT PRIMARY KEY, size_bytes INTEGER, "
+                    "mtime REAL, hash TEXT, gps_lat REAL, gps_lon REAL, date_src TEXT)")
+        rows = [("E:\\POZE\\good.jpg", len(self.good), 1.0, h(self.good)),
+                ("E:\\POZE\\bad.jpg", len(self.orig_bad), 1.0, h(self.orig_bad)),
+                ("E:\\POZE\\gone.jpg", 7, 1.0, h(b"vanished")),
+                ("E:\\POZE\\dup.jpg", len(self.dup), 1.0, h(self.dup))]
+        con.executemany("INSERT INTO media_index(path,size_bytes,mtime,hash) VALUES (?,?,?,?)", rows)
+        con.commit()
+        con.close()
+        write(self.source / "present.jpg", self.good)
+        write(self.source / "sub" / "missing.webp", b"webp bytes")
+        write(self.source / "missing.aae", b"aae bytes")
+        for folder in (self.backup, self.source):
+            for p in folder.rglob("*"):
+                if p.is_file():
+                    os.utime(p, (1_500_000_000, 1_500_000_000))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_main(self, argv):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = verify_backup.main(argv, out_dir=self.out_dir)
+        return code, buf.getvalue()
+
+    def report(self, suffix=".log") -> str:
+        files = sorted(self.out_dir.glob(f"*{suffix}"))
+        self.assertEqual(len(files), 1, files)
+        return files[0].read_text(encoding="utf-8")
+
+    def test_backup_mode(self):
+        before = (snapshot(self.backup), snapshot(self.source))
+        code, console = self.run_main(["backup", str(self.backup)])
+        self.assertEqual(code, 0, console)
+        self.assertEqual(before, (snapshot(self.backup), snapshot(self.source)))
+        text = self.report()
+        self.assertIn("used: sha256", text)
+        self.assertIn("files found: 6   hashed: 6", text)
+        self.assertIn("matched an index hash: 3", text)       # good + dup1 + dup2
+        self.assertIn("NOT in the index: 3", text)            # bad, extra, zero
+        self.assertIn("index rows whose hash matches no file in the backup: 2", text)
+        self.assertIn("zero-byte files: 1", text)
+        self.assertIn("groups of identical files (non-empty): 1", text)
+        self.assertIn("read errors: 0", text)
+        self.assertIn("bad.jpg", text)
+        self.assertIn("extra.jpg", text)
+        self.assertIn("E:\\POZE\\gone.jpg", text)             # orphan row with source path
+        self.assertIn("E:\\POZE\\bad.jpg", text)              # its content changed
+        self.assertIn("\u03a0\u03b1\u03c4\u03c1\u03b1", text)
+        self.assertIn("<10 MB", text)
+        self.assertNotIn("ignored.txt", text)
+        self.assertIn("dup1.jpg", text)
+        self.assertIn("dup2.jpg", text)
+        self.assertNotIn("PARTIAL", text)
+
+        tsv = self.report(".tsv").splitlines()
+        self.assertEqual(tsv[0], "#algo=sha256")
+        self.assertEqual(tsv[1], "relpath\tsize\tmtime\thash\tmatched")
+        rows = {r.split("\t")[0]: r.split("\t") for r in tsv[2:]}
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(rows[os.path.join("2019", "07_July", "good.jpg")][4], "yes")
+        self.assertEqual(rows[os.path.join("2019", "07_July", "bad.jpg")][4], "no")
+        self.assertEqual(rows[os.path.join("2019", "07_July", "good.jpg")][3], sha(self.good))
+
+    def test_blake3_missing_is_reported(self):
+        with mock.patch.object(verify_backup, "blake3_available", return_value=False):
+            code, console = self.run_main(["backup", str(self.backup)])
+            self.assertEqual(code, 0)
+            self.assertIn("pip install blake3", console)
+            self.assertIn("pip install blake3", self.report())
+        for f in self.out_dir.glob("*"):
+            f.unlink()
+        with mock.patch.object(verify_backup, "blake3_available", return_value=False):
+            code, console = self.run_main(["backup", str(self.backup), "--algo", "blake3"])
+        self.assertEqual(code, 2)
+        self.assertIn("pip install blake3", self.report())
+
+    def test_source_mode(self):
+        self.run_main(["backup", str(self.backup)])
+        tsv = next(self.out_dir.glob("*.tsv"))
+        before = (snapshot(self.backup), snapshot(self.source))
+        code, console = self.run_main(["source", str(self.backup), str(self.source),
+                                       "--hashes", str(tsv)])
+        self.assertEqual(code, 0, console)
+        self.assertEqual(before, (snapshot(self.backup), snapshot(self.source)))
+        text = next(p for p in self.out_dir.glob("verify-source-*.log")).read_text(encoding="utf-8")
+        self.assertIn("files hashed: 3 of 3", text)
+        self.assertIn("present in the backup: 1", text)
+        self.assertIn("MISSING from the backup: 2", text)
+        self.assertIn("missing.webp", text)
+        self.assertIn("missing.aae", text)
+        self.assertIn(".webp", text)
+        self.assertRegex(text, r"\.webp\s+0\s+1\s+photo\s\*")
+        self.assertRegex(text, r"\.aae\s+0\s+1\s+sidecar\s\*")
+        self.assertNotIn("present.jpg", text.split("missing files by extension")[1])
+
+    def test_source_mode_uses_tsv_only_hashes(self):
+        # content present in the backup but not in the index (extra.jpg) is found via the TSV
+        write(self.source / "extra_copy.jpg", b"not in the index")
+        self.run_main(["backup", str(self.backup)])
+        tsv = next(self.out_dir.glob("*.tsv"))
+        self.run_main(["source", str(self.backup), str(self.source), "--hashes", str(tsv)])
+        text = next(p for p in self.out_dir.glob("verify-source-*.log")).read_text(encoding="utf-8")
+        self.assertIn("via TSV only: 1", text)
+
+    def test_refuses_output_inside_inspected_folder(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = verify_backup.main(["backup", str(self.backup)], out_dir=self.backup / "out")
+        self.assertEqual(code, 2)
+        self.assertFalse((self.backup / "out").exists())
+
+    def test_interrupt_writes_partial_report(self):
+        real = verify_backup.hash_file
+        calls = {"n": 0}
+
+        def flaky(path, algos, progress):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise KeyboardInterrupt
+            return real(path, algos, progress)
+
+        with mock.patch.object(verify_backup, "hash_file", flaky):
+            code, _ = self.run_main(["backup", str(self.backup)])
+        self.assertEqual(code, 130)
+        text = next(self.out_dir.glob("*PARTIAL.log")).read_text(encoding="utf-8")
+        self.assertIn("PARTIAL REPORT", text)
+        self.assertIn("hashed: 2", text)
+
+    def test_read_error_does_not_stop_walk(self):
+        real = verify_backup.hash_file
+
+        def flaky(path, algos, progress):
+            if path.endswith("extra.jpg"):
+                raise PermissionError("denied on purpose")
+            return real(path, algos, progress)
+
+        with mock.patch.object(verify_backup, "hash_file", flaky):
+            code, _ = self.run_main(["backup", str(self.backup)])
+        self.assertEqual(code, 0)
+        text = self.report()
+        self.assertIn("read errors: 1", text)
+        self.assertIn("denied on purpose", text)
+        self.assertIn("hashed: 5", text)
+
+
+@unittest.skipUnless(HAVE_BLAKE3, "blake3 is not installed")
+class VerifyBackupBlake3Tests(VerifyBackupTests):
+    hash_fn = staticmethod(b3)
+
+    def test_backup_mode(self):
+        before = snapshot(self.backup)
+        code, _ = self.run_main(["backup", str(self.backup)])
+        self.assertEqual(code, 0)
+        self.assertEqual(before, snapshot(self.backup))
+        text = self.report()
+        self.assertIn("used: blake3", text)
+        self.assertIn("matched an index hash: 3", text)
+        self.assertEqual(self.report(".tsv").splitlines()[0], "#algo=blake3")
+
+    def test_blake3_missing_is_reported(self):
+        pass
+
+    def test_source_mode_uses_tsv_only_hashes(self):
+        pass
+
+
+if __name__ == "__main__":
+    unittest.main()
