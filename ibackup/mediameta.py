@@ -127,11 +127,16 @@ def _read_exif_block(path: Path, ext: str):
     return None
 
 
-def extract(path, *, use_filename: bool = True, use_mtime: bool = True,
-            detect_screenshots: bool = True) -> MediaMeta:
-    """Metadata for a local file. Never raises on a damaged file."""
+def extract(path, *, logical_path=None, use_filename: bool = True,
+            use_mtime: bool = True, detect_screenshots: bool = True) -> MediaMeta:
+    """Metadata for a local file. Never raises on a damaged file.
+
+    `logical_path` is where the file sits inside its source; the name and
+    folder rules read it instead of `path`, which may be a staging copy.
+    """
     path = Path(path)
-    name = path.name
+    logical = Path(logical_path) if logical_path is not None else path
+    name = logical.name
     ext = path.suffix.lower()
     meta = MediaMeta(kind=kind_for_name(name))
 
@@ -173,7 +178,7 @@ def extract(path, *, use_filename: bool = True, use_mtime: bool = True,
     # tells us truthfully whether the file carried an EXIF date of its own.
     if meta.kind == "photo" and detect_screenshots:
         from .screenshot import screenshot_reason
-        reason = screenshot_reason(path, meta)
+        reason = screenshot_reason(logical, meta)
         if reason is not None:
             meta.kind = "screenshot"
             meta.screenshot_reason = reason

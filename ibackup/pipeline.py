@@ -13,6 +13,7 @@ followed by a rename, so an interrupted run leaves no half-written files.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,7 +27,7 @@ from .hashing import Fingerprint, file_md5, partial_md5, partial_md5_from_reader
 from .mediameta import MediaMeta, extract, kind_for_name, utc_now
 from .reporter import Reporter
 from .sources.base import Localized, Source, SourceItem
-from .util import GB, free_space, human_size, unique_path
+from .util import GB, free_space, human_size, sanitize_component, unique_path
 
 _PRIMARY_ORDER = {"photo": 0, "video": 1, "sidecar": 2, "other": 3}
 
@@ -326,6 +327,8 @@ class Importer:
             meta = MediaMeta(kind="sidecar")
         else:
             meta = extract(local.path,
+                           logical_path=PurePosixPath(item.rel_dir, item.name),
+                           use_mtime=not local.is_temp,
                            detect_screenshots=self.cfg.detect_screenshots)
             if meta.kind == "screenshot":
                 self.report.detail(
@@ -701,6 +704,22 @@ def verify_backup(cfg: Config, db: Database, report: Reporter,
     return stats
 
 
+def _place_from_layout(rel: str, kind: str, cfg: Config) -> str | None:
+    """The place folder of a file in the backup: the one right under its month."""
+    if kind == "screenshot" and cfg.screenshot_dir:
+        return None
+    dirs = list(PurePosixPath(rel).parent.parts)
+    if (kind == "video" and cfg.video_subdir and dirs
+            and dirs[-1] == sanitize_component(cfg.video_subdir, fallback="Video")):
+        dirs.pop()
+    if len(dirs) == 2 and dirs[0] == organize.NO_DATE_FOLDER:
+        return dirs[1]
+    if (len(dirs) == 3 and re.fullmatch(r"\d{4}", dirs[0])
+            and re.fullmatch(r"\d{2}_.+", dirs[1])):
+        return dirs[2]
+    return None
+
+
 def reindex(cfg: Config, db: Database, geocoder: Geocoder, report: Reporter) -> dict:
     """Rebuild the index from the files already sitting in the backup.
 
@@ -723,11 +742,11 @@ def reindex(cfg: Config, db: Database, geocoder: Geocoder, report: Reporter) -> 
             try:
                 size = full.stat().st_size
                 fp = Fingerprint(size, partial_md5(full, size, cfg.partial_chunk))
-                meta = extract(full)
+                meta = extract(full, logical_path=PurePosixPath(rel))
             except OSError as exc:
                 report.warn(f"{rel}: {exc}")
                 continue
-            place = full.parent.name
+            place = _place_from_layout(rel, meta.kind, cfg)
             db.insert_media(
                 size=fp.size, partial_md5=fp.partial_md5, full_md5=None,
                 rel_path=rel, filename=name, kind=meta.kind,
