@@ -64,6 +64,7 @@ class MtpSource(Source):
 
     def __init__(self, *, device_name: str | None = None, accept_kinds=None,
                  copy_timeout=180.0):
+        super().__init__()
         pythoncom, client = _import_win32()
         pythoncom.CoInitialize()
         self._client = client
@@ -139,14 +140,20 @@ class MtpSource(Source):
         return None
 
     def _walk(self, folder, rel_dir: str, depth: int) -> Iterator[SourceItem]:
-        if folder is None or depth > 6:
+        if folder is None:
+            self._skip(rel_dir or "(device root)", "folder not readable")
+            return
+        if depth > 6:
+            self._skip(rel_dir, "deeper than 6 levels")
             return
         self._folders[rel_dir] = folder
         try:
             items = list(folder.Items())
-        except Exception:
+        except Exception as exc:
+            self._skip(rel_dir, f"folder not readable: {type(exc).__name__}: {exc}")
             return
         for item in items:
+            name = "?"
             try:
                 name = str(item.Name)
                 if item.IsFolder:
@@ -154,6 +161,7 @@ class MtpSource(Source):
                     yield from self._walk(self._folder_of(item), child_rel, depth + 1)
                     continue
                 if not self._accepts(name):
+                    self._ignore(name)
                     continue
                 size = self._size_of(item)
                 yield SourceItem(
@@ -161,7 +169,9 @@ class MtpSource(Source):
                     name=name, rel_dir=rel_dir, size=size,
                     mtime=self._mtime_of(item), kind=self.kind,
                 )
-            except Exception:
+            except Exception as exc:
+                self._skip(f"{rel_dir}/{name}" if rel_dir else name,
+                           f"not readable: {type(exc).__name__}: {exc}")
                 continue
 
     def iter_items(self) -> Iterator[SourceItem]:

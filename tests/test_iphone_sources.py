@@ -188,6 +188,7 @@ class AfcSourceTests(PhoneTestCase):
         with patch.object(service, "listdir", flaky):
             names = sorted(i.name for i in source.iter_items())
         self.assertEqual(names, ["IMG_0001.JPG", "IMG_0002.HEIC", "IMG_0002.MOV"])
+        self.assertEqual([path for path, _ in source.skipped], ["/DCIM/101APPLE"])
 
 
 class AfcImportTests(PhoneTestCase):

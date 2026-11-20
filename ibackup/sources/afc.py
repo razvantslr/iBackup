@@ -60,6 +60,7 @@ class AfcSource(Source):
 
     def __init__(self, *, serial: str | None = None, roots=DEFAULT_ROOTS,
                  accept_kinds=None):
+        super().__init__()
         create_using_usbmux, AfcService = _import_pymobiledevice3()
         try:
             self.lockdown = create_using_usbmux(serial=serial)
@@ -93,9 +94,13 @@ class AfcSource(Source):
 
     def _stat(self, path: str) -> dict:
         try:
-            return self.afc.stat(path) or {}
-        except Exception:
+            info = self.afc.stat(path)
+        except Exception as exc:
+            self._skip(path, f"cannot stat: {type(exc).__name__}: {exc}")
             return {}
+        if not info:
+            self._skip(path, "stat returned nothing")
+        return info or {}
 
     def _is_dir(self, info: dict) -> bool:
         return str(info.get("st_ifmt", "")).upper().endswith("IFDIR")
@@ -105,23 +110,29 @@ class AfcSource(Source):
 
     def _walk(self, path: str, depth: int) -> Iterator[SourceItem]:
         if depth > MAX_DEPTH:
+            self._skip(path, f"deeper than {MAX_DEPTH} levels")
             return
         try:
             names = sorted(self.afc.listdir(path))
-        except Exception:
+        except Exception as exc:
+            self._skip(path, f"folder not readable: {type(exc).__name__}: {exc}")
             return
         for name in names:
             if name in (".", ".."):
                 continue
             child = posixpath.join(path, name)
             info = self._stat(child)
+            if not info:
+                continue  # _stat noted it
             if self._is_dir(info):
                 yield from self._walk(child, depth + 1)
                 continue
             if not self._accepts(name):
+                self._ignore(name)
                 continue
             size = int(info.get("st_size") or 0)
             if size <= 0:
+                self._skip(child, "empty file")
                 continue
             mtime = info.get("st_mtime")
             stamp = None

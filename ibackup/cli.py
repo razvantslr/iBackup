@@ -151,12 +151,15 @@ def cmd_import(args) -> int:
                 stats = importer.import_source(source)
             finally:
                 source.close()
-            title = "Result (DRY-RUN, nothing written):" if args.dry_run else "Result:"
+            title = "Result (DRY-RUN, nothing copied):" if args.dry_run else "Result:"
             report.summary(title, stats.as_dict())
             return 1 if stats.errors else 0
+    except KeyboardInterrupt:
+        report.log_only("Interrupted by the user (Ctrl+C).")
+        raise
     except Exception as exc:
         report.error(f"{type(exc).__name__}: {exc}")
-        report.detail(traceback.format_exc().rstrip())
+        report.log_only(traceback.format_exc().rstrip())
         return 2
     finally:
         report.close()
@@ -332,7 +335,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", required=True,
                    help="'iphone', 'iphone:afc', 'iphone:mtp' or a folder path")
     p.add_argument("--dry-run", action="store_true",
-                   help="show what would happen, write nothing")
+                   help="show what would happen; copy nothing, only write a log")
     p.add_argument("--limit", type=int, help="stop after N files (for testing)")
     p.add_argument("--no-infer", action="store_true",
                    help="do not guess locations from photos close in time")

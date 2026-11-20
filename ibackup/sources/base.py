@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,21 @@ class Source:
     kind = "base"
     label = "source"
     supports_random_read = False
+
+    def __init__(self):
+        # What the walk could not read, and the non-media files it passed over.
+        # The pipeline writes both to the run log.
+        self.skipped: list[tuple[str, str]] = []
+        self.ignored: Counter[str] = Counter()
+
+    def _skip(self, path, reason: str) -> None:
+        self.skipped.append((str(path), reason))
+
+    def _ignore(self, name: str) -> None:
+        from ..mediameta import is_media_name
+
+        if not is_media_name(name):
+            self.ignored[os.path.splitext(name)[1].lower() or "(no extension)"] += 1
 
     def iter_items(self) -> Iterator[SourceItem]:
         raise NotImplementedError

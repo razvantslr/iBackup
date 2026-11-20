@@ -41,6 +41,10 @@ class Reporter:
             self._clear_line()
             print(text)
 
+    def log_only(self, text: str) -> None:
+        """For the log file alone, e.g. a traceback behind a one-line error."""
+        self._write_log(text)
+
     def warn(self, text: str) -> None:
         self._write_log("WARNING: " + text)
         if not self.quiet:
@@ -86,6 +90,8 @@ class Reporter:
         "no_gps": "without GPS coordinates",
         "inferred_places": "locations guessed from neighbouring photos",
         "errors": "errors",
+        "source_skipped": "skipped in the source: unreadable or empty",
+        "metadata_errors": "metadata unreadable (see warnings)",
         "checked": "files checked",
         "changed": "locations renamed",
         "moved": "files moved",

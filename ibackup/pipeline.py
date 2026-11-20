@@ -65,6 +65,8 @@ class Stats:
     bytes_copied: int = 0
     inferred_places: int = 0
     filtered: int = 0
+    source_skipped: int = 0
+    metadata_errors: int = 0
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -129,7 +131,7 @@ class Importer:
 
         self.report.info(f"Source: {source.label}")
         self.report.info(f"Destination: {self.cfg.dest}"
-                         + ("  [DRY-RUN, nothing is written]" if self.dry_run else ""))
+                         + ("  [DRY-RUN, nothing is copied]" if self.dry_run else ""))
 
         try:
             for group in group_items(source.iter_items()):
@@ -149,6 +151,12 @@ class Importer:
             if not self.dry_run:
                 self.db.conn.commit()
                 self._cleanup_staging()
+            for path, reason in source.skipped:
+                self.report.warn(f"not read from the source: {path} ({reason})")
+            self.stats.source_skipped = len(source.skipped)
+            if source.ignored:
+                self.report.info("Not media, left in the source: " + ", ".join(
+                    f"{ext} x{count}" for ext, count in source.ignored.most_common()))
 
         if self.cfg.infer_enabled and not self.dry_run:
             self.stats.inferred_places = infer_locations(
@@ -181,7 +189,7 @@ class Importer:
             self.stats.errors += 1
             message = f"{item.ref}: {type(exc).__name__}: {exc}"
             self.report.error(message)
-            self.report.detail(traceback.format_exc().rstrip())
+            self.report.log_only(traceback.format_exc().rstrip())
             if not self.dry_run and self.run_id is not None:
                 try:
                     self.db.log_error(self.run_id, item.ref, message)
@@ -337,6 +345,10 @@ class Importer:
                            logical_path=_source_path(item),
                            use_mtime=not local.is_temp,
                            detect_screenshots=self.cfg.detect_screenshots)
+            if meta.read_error:
+                self.stats.metadata_errors += 1
+                self.report.warn(f"metadata unreadable: {_source_path(item)}: "
+                                 f"{meta.read_error}")
             if meta.kind == "screenshot":
                 self.report.detail(
                     f"screenshot ({meta.screenshot_reason}): {_source_path(item)}")
@@ -382,8 +394,9 @@ class Importer:
         rel_final = dest_abs.relative_to(self.cfg.dest).as_posix()
         self._taken.add(str(dest_abs).lower())
 
-        date_note = (f"date {taken_at:%Y-%m-%d %H:%M} ({meta.taken_at_source or '?'})"
-                     if taken_at else "no date")
+        date_from = ("its photo" if anchor is not None and anchor.taken_at
+                     else meta.taken_at_source or "?")
+        date_note = f"date {taken_at:%Y-%m-%d %H:%M} ({date_from})" if taken_at else "no date"
         why = (f"{meta.kind}; {date_note}; "
                f"place {place} ({place_source or 'no GPS'})")
         if anchor is not None:

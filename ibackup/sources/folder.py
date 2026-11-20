@@ -15,6 +15,7 @@ class FolderSource(Source):
 
     def __init__(self, root, *, skip_dirs=None, accept_kinds=None,
                  follow_symlinks=False):
+        super().__init__()
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             raise NotADirectoryError(f"The source is not a folder: {self.root}")
@@ -27,20 +28,27 @@ class FolderSource(Source):
         return accepts_kind(name, self.accept_kinds)
 
     def iter_items(self) -> Iterator[SourceItem]:
-        for dirpath, dirnames, filenames in os.walk(self.root, followlinks=self.follow_symlinks):
+        def unreadable(exc: OSError) -> None:
+            self._skip(exc.filename, f"folder not readable: {exc.strerror}")
+
+        for dirpath, dirnames, filenames in os.walk(self.root, onerror=unreadable,
+                                                    followlinks=self.follow_symlinks):
             dirnames[:] = sorted(d for d in dirnames if d.lower() not in self.skip_dirs)
             rel_dir = os.path.relpath(dirpath, self.root).replace("\\", "/")
             if rel_dir == ".":
                 rel_dir = ""
             for name in sorted(filenames):
                 if not self._accepts(name):
+                    self._ignore(name)
                     continue
                 full = Path(dirpath) / name
                 try:
                     stat = full.stat()
-                except OSError:
+                except OSError as exc:
+                    self._skip(full, f"cannot stat: {exc}")
                     continue
                 if stat.st_size == 0:
+                    self._skip(full, "empty file")
                     continue
                 yield SourceItem(
                     ref=str(full), name=name, rel_dir=rel_dir,

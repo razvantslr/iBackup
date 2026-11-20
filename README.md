@@ -54,7 +54,7 @@ After `init` the path is stored in `config.toml`, so from elsewhere you can pass
 | Command | What it does |
 |---|---|
 | `init` | Create the structure, `config.toml` and an empty index. |
-| `scan --source X` | Dry run: say what would be copied, write nothing. |
+| `scan --source X` | Dry run: say what would be copied; copies nothing, only writes a log. |
 | `import --source X` | Copy for real. `X` = a folder, `iphone`, `iphone:afc`, `iphone:mtp`. |
 | `devices` | Which ways of reaching the phone are available right now. |
 | `status` | What the backup holds: by year, by location, how much space. |
