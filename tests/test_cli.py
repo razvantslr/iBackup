@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import sqlite3
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -159,6 +160,130 @@ class RunLogTests(unittest.TestCase):
             log = self.run_cli("import", "--source", str(self.src))
         self.assertIn("metadata unreadable", log)
         self.assertIn("trip/IMG_0001.jpg: ValueError: bad TIFF", log)
+
+
+def snapshot(root: Path):
+    """Every file as (size, mtime_ns) plus the set of directories."""
+    files, dirs = {}, set()
+    for path in root.rglob("*"):
+        rel = path.relative_to(root).as_posix()
+        if path.is_dir():
+            dirs.add(rel)
+        else:
+            st = path.stat()
+            files[rel] = (st.st_size, st.st_mtime_ns)
+    return files, dirs
+
+
+class ForeignIndexTests(unittest.TestCase):
+    """A backup made by an older tool keeps its own index.db; never touch it."""
+
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.src = root / "old"
+        self.dest = root / "backup"
+        synth.write_photo(self.src / "IMG_0001.jpg",
+                          datetime(2025, 1, 14, 18, 30), BARCELONA)
+        synth.write_photo(self.dest / "2025" / "IMG_0002.jpg",
+                          datetime(2025, 2, 1, 9, 0), BARCELONA)
+        synth.write_photo(self.dest / "2025" / "IMG_0003.jpg",
+                          datetime(2025, 2, 2, 9, 0), BARCELONA)
+        self.index = self.dest / ".ibackup" / "index.db"
+        self.index.parent.mkdir(parents=True)
+        (self.index.parent / "logs").mkdir()
+        (self.index.parent / "logs" / "ibackup_2026-03-25.log").write_text(
+            "old tool log\n", encoding="utf-8")
+        self.cities = root / "cities5000.txt"
+        self.cities.write_text(GEONAMES_ROW, encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def make_foreign(self, wal=False):
+        conn = sqlite3.connect(str(self.index))
+        if wal:
+            conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript("""
+            CREATE TABLE media_index(path TEXT PRIMARY KEY, size_bytes INTEGER,
+                mtime REAL, hash TEXT, gps_lat REAL, gps_lon REAL, date_src TEXT);
+            CREATE TABLE location_cache(lat_r REAL, lon_r REAL, city TEXT,
+                PRIMARY KEY(lat_r, lon_r));
+            INSERT INTO media_index VALUES ('2025/IMG_0002.jpg', 10, 1.5, 'aa',
+                41.39, 2.17, 'exif');
+            INSERT INTO media_index VALUES ('2025/IMG_0003.jpg', 11, 2.5, 'bb',
+                NULL, NULL, 'mtime');
+            INSERT INTO location_cache VALUES (41.39, 2.17, 'Barcelona');
+        """)
+        conn.commit()
+        return conn
+
+    def commands(self):
+        return {
+            "init": ["init"],
+            "import": ["import", "--source", str(self.src)],
+            "scan": ["scan", "--source", str(self.src)],
+            "status": ["status"],
+            "verify": ["verify"],
+            "relocate": ["relocate"],
+            "reorganize": ["reorganize"],
+            "regeocode": ["regeocode"],
+            "reindex": ["reindex"],
+            "geonames": ["geonames", "--install", str(self.cities)],
+        }
+
+    def assert_all_refused(self):
+        before = snapshot(self.dest)
+        for name, args in self.commands().items():
+            with self.subTest(command=name):
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = cli.main(["--dest", str(self.dest), *args])
+                self.assertEqual(code, 2)
+                self.assertIn(str(self.index), err.getvalue())
+                self.assertIn("another tool", err.getvalue())
+                self.assertEqual(snapshot(self.dest), before)
+
+    def test_every_command_refuses_a_foreign_index(self):
+        self.make_foreign().close()
+        self.assert_all_refused()
+
+    def test_a_foreign_wal_index_with_an_open_writer_is_left_alone(self):
+        writer = self.make_foreign(wal=True)
+        try:
+            writer.execute("INSERT INTO location_cache VALUES (1.0, 2.0, 'X')")
+            writer.commit()
+            self.assertTrue(self.index.with_name("index.db-wal").exists())
+            self.assertTrue(self.index.with_name("index.db-shm").exists())
+            self.assert_all_refused()
+        finally:
+            writer.close()
+
+    def test_a_foreign_table_that_only_lives_in_the_wal_is_detected(self):
+        writer = sqlite3.connect(str(self.index))
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE media_index(path TEXT PRIMARY KEY)")
+        writer.commit()
+        try:
+            self.assert_all_refused()
+        finally:
+            writer.close()
+
+    def test_a_fresh_dest_and_an_existing_ibackup_dest_still_work(self):
+        fresh = Path(self._tmp.name) / "fresh"
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            first = cli.main(["--dest", str(fresh), "import", "--source", str(self.src)])
+            second = cli.main(["--dest", str(fresh), "import", "--source", str(self.src)])
+        self.assertEqual((first, second), (0, 0))
+        self.assertTrue((fresh / ".ibackup" / "index.db").exists())
+
+    def test_an_empty_index_file_counts_as_fresh(self):
+        self.index.write_bytes(b"")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            code = cli.main(["--dest", str(self.dest), "import",
+                             "--source", str(self.src)])
+        self.assertEqual(code, 0)
 
 
 if __name__ == "__main__":

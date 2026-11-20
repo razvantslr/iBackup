@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import __version__, pipeline
 from .config import MEDIA_KINDS, Config, load_config, write_default_config
-from .db import Database
+from .db import Database, is_foreign_index
 from .geocode import Geocoder, load_geonames
 from .reporter import Reporter
 from .sources import build_source, describe_backends
@@ -37,7 +37,17 @@ def _config_from_args(args) -> Config:
     if getattr(args, "no_cache", False):
         cfg.use_source_cache = False
     _apply_kind_filter(cfg, args)
+    _refuse_foreign_index(cfg)
     return cfg
+
+
+def _refuse_foreign_index(cfg: Config) -> None:
+    """Every command with a --dest starts here, before anything is created."""
+    if is_foreign_index(cfg.db_path):
+        raise ValueError(
+            f"{cfg.db_path} was made by another tool, not by this one, and was "
+            f"left untouched (nothing was created or changed in {cfg.dest}). "
+            f"Use a different --dest.")
 
 
 def _apply_kind_filter(cfg: Config, args) -> None:

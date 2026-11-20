@@ -7,7 +7,9 @@ the SSD. If it is ever lost, `reindex` rebuilds it from the files on disk.
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -100,6 +102,33 @@ CREATE TABLE IF NOT EXISTS errors (
     at         TEXT
 );
 """
+
+
+def is_foreign_index(path: Path) -> bool:
+    """True if `path` is a database that another tool made (tables, no schema_info).
+
+    Opening a WAL database in place writes a -shm file even read-only, so the
+    schema is read from a temporary copy of the file and its -wal.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return False
+    with tempfile.TemporaryDirectory(prefix="ibackup-check-") as tmp:
+        copy = Path(tmp) / "index.db"
+        shutil.copyfile(path, copy)
+        wal = path.with_name(path.name + "-wal")
+        if wal.is_file():
+            shutil.copyfile(wal, Path(tmp) / "index.db-wal")
+        conn = sqlite3.connect(str(copy))
+        try:
+            names = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'")}
+        except sqlite3.DatabaseError:
+            return True
+        finally:
+            conn.close()
+    return bool(names) and "schema_info" not in names
 
 
 def _now() -> str:
