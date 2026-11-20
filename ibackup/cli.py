@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import platform
 import sys
+import traceback
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from . import pipeline
+from . import __version__, pipeline
 from .config import MEDIA_KINDS, Config, load_config, write_default_config
 from .db import Database
 from .geocode import Geocoder, load_geonames
@@ -92,10 +94,10 @@ def build_geocoder(cfg: Config, report: Reporter | None = None) -> Geocoder:
 
 
 def _reporter(cfg: Config, args, name: str) -> Reporter:
-    log_path = None
-    if not getattr(args, "dry_run", False):
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        log_path = cfg.log_dir / f"{name}-{stamp}.log"
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if getattr(args, "dry_run", False):
+        name += "-dryrun"
+    log_path = cfg.log_dir / f"{name}-{stamp}.log"
     return Reporter(log_path=log_path, quiet=args.quiet, verbose=args.verbose)
 
 
@@ -127,6 +129,16 @@ def cmd_import(args) -> int:
     cfg = _config_from_args(args)
     cfg.internal_dir.mkdir(parents=True, exist_ok=True)
     report = _reporter(cfg, args, "import")
+    report.detail(f"ibackup {__version__}, Python {platform.python_version()}, "
+                  f"{platform.platform()}")
+    report.detail(
+        f"Settings: language={cfg.language!r}, screenshot_dir={cfg.screenshot_dir!r}, "
+        f"video_subdir={cfg.video_subdir!r}, "
+        f"detect_screenshots={cfg.detect_screenshots}, "
+        f"geo_radius_km={cfg.geo_radius_km}, geo_prefer={cfg.geo_prefer!r}, "
+        f"infer_enabled={cfg.infer_enabled}, verify_after_copy={cfg.verify_after_copy}, "
+        f"kinds={sorted(cfg.allowed_kinds())}, dry_run={args.dry_run}, "
+        f"limit={args.limit}")
     try:
         with Database(cfg.db_path) as db:
             geo = build_geocoder(cfg, report)
@@ -144,6 +156,7 @@ def cmd_import(args) -> int:
             return 1 if stats.errors else 0
     except Exception as exc:
         report.error(f"{type(exc).__name__}: {exc}")
+        report.detail(traceback.format_exc().rstrip())
         return 2
     finally:
         report.close()

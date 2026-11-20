@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -87,6 +88,11 @@ def group_items(items):
         buffer.setdefault((item.rel_dir, item.stem.lower()), []).append(item)
     if buffer:
         yield from _flush(buffer)
+
+
+def _source_path(item: SourceItem) -> PurePosixPath:
+    """Where the file sits inside its source, e.g. DCIM/100APPLE/IMG_0001.HEIC."""
+    return PurePosixPath(item.rel_dir, item.name)
 
 
 def _flush(buffer):
@@ -175,6 +181,7 @@ class Importer:
             self.stats.errors += 1
             message = f"{item.ref}: {type(exc).__name__}: {exc}"
             self.report.error(message)
+            self.report.detail(traceback.format_exc().rstrip())
             if not self.dry_run and self.run_id is not None:
                 try:
                     self.db.log_error(self.run_id, item.ref, message)
@@ -197,7 +204,7 @@ class Importer:
             if decided["kind"] not in self.allowed_kinds:
                 self.stats.filtered += 1
                 self.report.detail(
-                    f"filtered out ({decided['kind']}): {item.name}")
+                    f"filtered out ({decided['kind']}): {_source_path(item)}")
                 return None
             return self._on_duplicate(item, fp, decided)
 
@@ -291,7 +298,7 @@ class Importer:
 
     def _on_duplicate(self, item: SourceItem, fp: Fingerprint, row) -> Anchor | None:
         self.stats.duplicates += 1
-        self.report.detail(f"duplicate: {item.name} -> {row['rel_path']}")
+        self.report.detail(f"duplicate: {_source_path(item)} -> {row['rel_path']}")
         if not self.dry_run:
             self.db.record_duplicate(self.run_id, item, int(row["id"]),
                                      fp.size, fp.partial_md5)
@@ -327,19 +334,19 @@ class Importer:
             meta = MediaMeta(kind="sidecar")
         else:
             meta = extract(local.path,
-                           logical_path=PurePosixPath(item.rel_dir, item.name),
+                           logical_path=_source_path(item),
                            use_mtime=not local.is_temp,
                            detect_screenshots=self.cfg.detect_screenshots)
             if meta.kind == "screenshot":
                 self.report.detail(
-                    f"screenshot ({meta.screenshot_reason}): {item.name}")
+                    f"screenshot ({meta.screenshot_reason}): {_source_path(item)}")
 
         # Screenshots can only be told apart once the metadata has been read, so
         # this filter runs here rather than during enumeration. On a phone that
         # means the file was fetched and is now discarded.
         if meta.kind not in self.allowed_kinds:
             self.stats.filtered += 1
-            self.report.detail(f"filtered out ({meta.kind}): {item.name}")
+            self.report.detail(f"filtered out ({meta.kind}): {_source_path(item)}")
             self._remember(item, fp, None)
             return None
 
@@ -375,17 +382,24 @@ class Importer:
         rel_final = dest_abs.relative_to(self.cfg.dest).as_posix()
         self._taken.add(str(dest_abs).lower())
 
+        date_note = (f"date {taken_at:%Y-%m-%d %H:%M} ({meta.taken_at_source or '?'})"
+                     if taken_at else "no date")
+        why = (f"{meta.kind}; {date_note}; "
+               f"place {place} ({place_source or 'no GPS'})")
+        if anchor is not None:
+            why += "; paired with its photo"
+
         if self.dry_run:
             self.stats.imported += 1
             self.stats.bytes_copied += fp.size
             self._dry_seen[fp.as_key()] = rel_final
-            self.report.detail(f"would copy: {item.name} -> {rel_final}")
+            self.report.detail(f"would copy: {_source_path(item)} -> {rel_final} [{why}]")
         else:
             self._ensure_space(fp.size)
             self._place_file(local, dest_abs, fp, item)
             self.stats.imported += 1
             self.stats.bytes_copied += fp.size
-            self.report.detail(f"copied: {item.name} -> {rel_final}")
+            self.report.detail(f"copied: {_source_path(item)} -> {rel_final} [{why}]")
             media_id = self.db.insert_media(
                 size=fp.size, partial_md5=fp.partial_md5, full_md5=None,
                 rel_path=rel_final, filename=dest_abs.name, kind=meta.kind,
