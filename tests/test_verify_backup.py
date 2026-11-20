@@ -234,5 +234,40 @@ class VerifyBackupBlake3Tests(VerifyBackupTests):
         pass
 
 
+class Blake3InstallPromptTests(unittest.TestCase):
+    def offer(self, *, tty=True, answer="y", installed_after=True, returncode=0):
+        run = mock.Mock(return_value=mock.Mock(returncode=returncode))
+        with mock.patch.object(verify_backup.sys.stdin, "isatty", return_value=tty), \
+                mock.patch("builtins.input", return_value=answer) as ask, \
+                mock.patch.object(verify_backup.subprocess, "run", run), \
+                mock.patch.object(verify_backup, "blake3_available",
+                                  return_value=installed_after):
+            result = verify_backup.offer_blake3_install()
+        return result, ask, run
+
+    def test_yes_runs_pip_for_this_python(self):
+        result, _, run = self.offer(answer="y")
+        self.assertTrue(result)
+        run.assert_called_once_with(
+            [verify_backup.sys.executable, "-m", "pip", "install", "blake3"])
+
+    def test_anything_but_yes_installs_nothing(self):
+        for answer in ("", "n", "no", "nu"):
+            with self.subTest(answer=answer):
+                result, _, run = self.offer(answer=answer)
+                self.assertFalse(result)
+                run.assert_not_called()
+
+    def test_no_console_means_no_question(self):
+        result, ask, run = self.offer(tty=False)
+        self.assertFalse(result)
+        ask.assert_not_called()
+        run.assert_not_called()
+
+    def test_a_failed_install_falls_back(self):
+        result, _, _ = self.offer(returncode=1)
+        self.assertFalse(result)
+
+
 if __name__ == "__main__":
     unittest.main()

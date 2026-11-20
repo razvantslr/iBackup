@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import os
 import platform
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -58,6 +60,21 @@ def blake3_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def offer_blake3_install() -> bool:
+    """Ask before installing; only on an interactive console, never silently."""
+    if not sys.stdin.isatty():
+        return False
+    try:
+        answer = input("blake3 is not installed. Install it now with pip? [y/N] ")
+    except EOFError:
+        return False
+    if answer.strip().lower() not in ("y", "yes", "d", "da"):
+        return False
+    result = subprocess.run([sys.executable, "-m", "pip", "install", "blake3"])
+    importlib.invalidate_caches()
+    return result.returncode == 0 and blake3_available()
 
 
 def make_hasher(algo: str):
@@ -670,6 +687,8 @@ def main(argv=None, out_dir=None) -> int:
             return 2
 
     blake3_ok = blake3_available()
+    if not blake3_ok and args.algo in ("auto", "blake3"):
+        blake3_ok = offer_blake3_install()
     if args.mode == "backup":
         return run_backup(args, root, out_path, blake3_ok)
     return run_source(args, root, sources, out_path, blake3_ok)
